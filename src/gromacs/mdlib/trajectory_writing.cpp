@@ -184,7 +184,7 @@ do_md_trajectory_writing(FILE                    *fplog,
                 /* Make molecules whole only for confout writing */
                 do_pbc_mtop(fplog, ir->ePBC, state->box, top_global, x_for_confout);
             }
-            write_sto_conf_mtop(ftp2fn(efSTO, nfile, fnm),
+            write_sto_conf_mtop(opt2fn("-c", nfile, fnm),
                                 *top_global->name, top_global,
                                 x_for_confout, as_rvec_array(state_global->v.data()),
                                 ir->ePBC, state->box);

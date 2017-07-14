@@ -43,7 +43,9 @@
 
 #include <algorithm>
 
-#include "gromacs/domdec/domdec.h"
+#include "gromacs/domdec/domdec_struct.h"
+/* #include "gromacs/domdec/domdec.h" */
+#include "gromacs/gmxlib/md_logging.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/gmxlib/nrnb.h"
 #include "gromacs/math/vec.h"
@@ -52,8 +54,8 @@
 #include "gromacs/mdlib/simulationsignal.h"
 #include "gromacs/mdlib/tgroup.h"
 #include "gromacs/mdlib/update.h"
-#include "gromacs/mdlib/vcm.h"
 #include "gromacs/mdtypes/commrec.h"
+#include "gromacs/mdlib/vcm.h"
 #include "gromacs/mdtypes/df_history.h"
 #include "gromacs/mdtypes/energyhistory.h"
 #include "gromacs/mdtypes/group.h"
@@ -203,7 +205,7 @@ void compute_globals(FILE *fplog, gmx_global_stat *gstat, t_commrec *cr, t_input
     /* Calculate center of mass velocity if necessary, also parallellized */
     if (bStopCM)
     {
-        calc_vcm_grp(0, mdatoms->homenr, mdatoms,
+        calc_vcm_grp(fplog, DOMAINDECOMP(cr) ? (cr->dd->gatindex) : NULL, 0, mdatoms->homenr, mdatoms,
                      as_rvec_array(state->x.data()), as_rvec_array(state->v.data()), vcm);
     }
 
@@ -251,11 +253,11 @@ void compute_globals(FILE *fplog, gmx_global_stat *gstat, t_commrec *cr, t_input
          * to avoid (incorrect) correction of the initial coordinates.
          */
         rvec *xPtr = nullptr;
-        if (vcm->mode == ecmANGULAR || (vcm->mode == ecmLINEAR_ACCELERATION_CORRECTION && !(flags & CGLO_INITIALIZATION)))
+        if (vcm->mode == ecmANGULAR || vcm->mode == ecmRTC || (vcm->mode == ecmLINEAR_ACCELERATION_CORRECTION && !(flags & CGLO_INITIALIZATION)))
         {
             xPtr = as_rvec_array(state->x.data());
         }
-        do_stopcm_grp(mdatoms->homenr, mdatoms->cVCM,
+        do_stopcm_grp(fplog, DOMAINDECOMP(cr) ? (cr->dd->gatindex) : NULL, mdatoms->homenr, mdatoms->cVCM,
                       xPtr, as_rvec_array(state->v.data()), *vcm);
         inc_nrnb(nrnb, eNR_STOPCM, mdatoms->homenr);
     }

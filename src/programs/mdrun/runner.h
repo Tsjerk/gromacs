@@ -94,6 +94,7 @@ class Mdrunner
           { efCPT, "-cpi",      nullptr,     ffOPTRD | ffALLOW_MISSING },
           { efCPT, "-cpo",      nullptr,     ffOPTWR },
           { efSTO, "-c",        "confout",   ffWRITE },
+	  { efSTO, "-rtc",      "rtcfef",    ffOPTRD },
           { efEDR, "-e",        "ener",      ffWRITE },
           { efLOG, "-g",        "md",        ffWRITE },
           { efXVG, "-dhdl",     "dhdl",      ffOPTWR },
