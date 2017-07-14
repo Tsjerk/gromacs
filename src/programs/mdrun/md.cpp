@@ -354,6 +354,12 @@ double gmx::do_md(FILE *fplog, t_commrec *cr, int nfile, const t_filenm fnm[],
             nfile, fnm, &outf, &mdebin,
             force_vir, shake_vir, mu_tot, &bSimAnn, &vcm, Flags, wcycle);
 
+    if (ir->comm_mode == ecmRTC)
+    {
+        vcm->rtc = init_rtc(top_global,mdatoms,cr,ir,opt2fn_null("-rtc",nfile,fnm),
+                            NULL,state_global->x,ftp2fn(efTPR,nfile,fnm));
+    }
+
     clear_mat(total_vir);
     clear_mat(pres);
     /* Energy terms and groups */
@@ -1580,6 +1586,12 @@ double gmx::do_md(FILE *fplog, t_commrec *cr, int nfile, const t_filenm fnm[],
         /* ################# END UPDATE STEP 2 ################# */
         /* #### We now have r(t+dt) and v(t+dt/2)  ############# */
 
+        /* This is a good time for bookkeeping rotational constraints */
+        if (ir->comm_mode == ecmRTC)
+        {
+            purge_rtc(fplog,cr->dd ? cr->dd->gatindex : NULL,mdatoms,state->v,vcm->rtc,bStopCM);
+        }
+    
         /* The coordinates (x) were unshifted in update */
         if (!bGStat)
         {

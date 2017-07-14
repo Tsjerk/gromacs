@@ -43,7 +43,8 @@
 
 #include <algorithm>
 
-#include "gromacs/domdec/domdec.h"
+#include "gromacs/domdec/domdec_struct.h"
+/* #include "gromacs/domdec/domdec.h" */
 #include "gromacs/gmxlib/md_logging.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/gmxlib/nrnb.h"
@@ -53,8 +54,8 @@
 #include "gromacs/mdlib/simulationsignal.h"
 #include "gromacs/mdlib/tgroup.h"
 #include "gromacs/mdlib/update.h"
-#include "gromacs/mdlib/vcm.h"
 #include "gromacs/mdtypes/commrec.h"
+#include "gromacs/mdlib/vcm.h"
 #include "gromacs/mdtypes/df_history.h"
 #include "gromacs/mdtypes/energyhistory.h"
 #include "gromacs/mdtypes/group.h"
@@ -290,7 +291,7 @@ void compute_globals(FILE *fplog, gmx_global_stat *gstat, t_commrec *cr, t_input
     /* Calculate center of mass velocity if necessary, also parallellized */
     if (bStopCM)
     {
-        calc_vcm_grp(0, mdatoms->homenr, mdatoms,
+      calc_vcm_grp(fplog,DOMAINDECOMP(cr) ? (cr->dd->gatindex) : NULL, 0, mdatoms->homenr, mdatoms,
                      state->x, state->v, vcm);
     }
 
@@ -334,7 +335,7 @@ void compute_globals(FILE *fplog, gmx_global_stat *gstat, t_commrec *cr, t_input
     if (bStopCM)
     {
         check_cm_grp(fplog, vcm, ir, 1);
-        do_stopcm_grp(0, mdatoms->homenr, mdatoms->cVCM,
+        do_stopcm_grp(fplog,DOMAINDECOMP(cr) ? (cr->dd->gatindex) : NULL, 0, mdatoms->homenr, mdatoms->cVCM,
                       state->x, state->v, vcm);
         inc_nrnb(nrnb, eNR_STOPCM, mdatoms->homenr);
     }
