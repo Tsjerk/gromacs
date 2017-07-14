@@ -195,7 +195,7 @@ const char *edispc_names[edispcNR+1] = {
 };
 
 const char *ecm_names[ecmNR+1] = {
-    "Linear", "Angular", "None", NULL
+    "Linear", "Angular", "RTC", "None", NULL
 };
 
 const char *eann_names[eannNR+1] = {

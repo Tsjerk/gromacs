@@ -40,6 +40,20 @@
 
 #include <stdio.h>
 
+/*
+#include "gromacs/fileio/filenm.h"
+#include "gromacs/legacyheaders/mdebin.h"
+#include "gromacs/legacyheaders/sim_util.h"
+#include "gromacs/legacyheaders/tgroup.h"
+#include "gromacs/legacyheaders/update.h"
+#include "gromacs/legacyheaders/vsite.h"
+#include "gromacs/legacyheaders/types/membedt.h"
+#include "gromacs/timing/wallcycle.h"
+*/
+
+#include "gromacs/legacyheaders/typedefs.h"
+#include "gromacs/legacyheaders/network.h"
+
 #include "gromacs/legacyheaders/types/inputrec.h"
 #include "gromacs/legacyheaders/types/mdatom.h"
 #include "gromacs/math/vectypes.h"
@@ -49,6 +63,36 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Roto-translational constraints */
+typedef struct {
+  /* Set at initialization */
+  int    nr;                   /* Number of groups                       */
+  int    nref;                 /* Number of atoms in reference structure */
+  rvec   *xref;                /* Reference structure                    */
+  rvec   *xp;                  /* Previous coordinates                   */
+  matrix *invinert;            /* Inverse matrix of inertia per group    */
+  gmx_bool   bFEP;             /* Set when doing FEP (masses may change) */
+  rvec   *refcom;              /* COM per group
+				  Note that masses may change during a
+				  simulation prohibiting precalculation  */
+  FILE   *log;                 /* File for logging/debugging             */
+
+  int    nst;                  /* Frequency (steps) for update (nstcomm) */
+  real   dt;                   /* Integration time step                  */
+
+  rvec   *outerc;              /* Cumulative some of cross products      */
+  rvec   *sumc;                /* Cumulative some of deviations          */
+
+  /* Only the following require global communication 
+   * and only at every nstcomm steps                                     */
+  rvec   *outerx;              /* Sum of cross products of deviations
+				  and reference positions                */
+  rvec   *outerv;              /* Sum of cross products of velocities
+				  and reference positions                */
+  rvec   *sumx;                /* Sum of m*x per group                   */
+  rvec   *sumv;                /* Sum of m*v per group                   */
+} t_rtc;
 
 struct gmx_groups_t;
 
@@ -65,15 +109,21 @@ typedef struct {
     tensor    *group_i;        /* Moment of inertia per group         */
     real      *group_mass;     /* Mass per group                      */
     char     **group_name;     /* These two are copies to pointers in */
+    t_rtc     *rtc;            /* Rotational constraints stuff        */
 } t_vcm;
 
 t_vcm *init_vcm(FILE *fp, struct gmx_groups_t *groups, t_inputrec *ir);
 
+t_rtc *init_rtc(gmx_mtop_t *mtop, t_mdatoms *atoms, t_commrec *cr, t_inputrec *ir,
+		const char *fnRTC, const char *fnLOG, rvec *x, const char *fnTPR);
+
+extern void purge_rtc(FILE *fp,int *la2ga,t_mdatoms *md,rvec x[],t_rtc *rtc,gmx_bool bStopCM);
+
 /* Do a per group center of mass things */
-void calc_vcm_grp(int start, int homenr, t_mdatoms *md,
+void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
                   rvec x[], rvec v[], t_vcm *vcm);
 
-void do_stopcm_grp(int start, int homenr,
+void do_stopcm_grp(FILE *fp, int *la2ga, int start, int homenr,
                    unsigned short *group_id,
                    rvec x[], rvec v[], t_vcm *vcm);
 

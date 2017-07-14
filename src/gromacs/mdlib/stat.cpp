@@ -154,6 +154,7 @@ void global_stat(FILE *fplog, gmx_global_stat_t gs,
     int        idedl = 0, idvdll = 0, idvdlnl = 0, iepl = 0, icm = 0, imass = 0, ica = 0, inb = 0;
     int        isig  = -1;
     int        icj   = -1, ici = -1, icx = -1;
+    int        icox  = -1, icsx = -1, icov = -1, icsv = -1; /* RTC */  
     int        inn[egNR];
     real       copyenerd[F_NRE];
     int        nener, j;
@@ -280,6 +281,22 @@ void global_stat(FILE *fplog, gmx_global_stat_t gs,
             ici   = add_binr(rb, DIM*DIM*vcm->nr, vcm->group_i[0][0]);
             where();
         }
+        else if (vcm->mode == ecmRTC)
+        {
+            if (vcm->rtc->bFEP)
+            {
+                ici   = add_binr(rb, DIM*vcm->rtc->nr, vcm->rtc->refcom[0]);
+                where();
+            }
+            icox  = add_binr(rb, DIM*vcm->rtc->nr, vcm->rtc->outerx[0]);
+            where();
+            icsx  = add_binr(rb, DIM*vcm->rtc->nr, vcm->rtc->sumx[0]);
+            where();
+            icov  = add_binr(rb, DIM*vcm->rtc->nr, vcm->rtc->outerv[0]);
+            where();
+            icsv  = add_binr(rb, DIM*vcm->rtc->nr, vcm->rtc->sumv[0]);
+            where();
+          }
     }
 
     if (DOMAINDECOMP(cr))
@@ -390,6 +407,22 @@ void global_stat(FILE *fplog, gmx_global_stat_t gs,
             where();
             extract_binr(rb, ici, DIM*DIM*vcm->nr, vcm->group_i[0][0]);
             where();
+        }
+        else if (vcm->mode == ecmRTC)
+        {
+            if (vcm->rtc->bFEP)
+            {
+                extract_binr(rb,ici,DIM*vcm->nr, vcm->rtc->refcom[0]);
+                where();
+            }
+            extract_binr(rb, icox, DIM*vcm->nr, vcm->rtc->outerx[0]);
+            where();           
+            extract_binr(rb, icsx, DIM*vcm->nr, vcm->rtc->sumx[0]);
+            where();           
+            extract_binr(rb, icov, DIM*vcm->nr, vcm->rtc->outerv[0]);
+            where();           
+            extract_binr(rb, icsv, DIM*vcm->nr, vcm->rtc->sumv[0]);
+            where();           
         }
     }
 

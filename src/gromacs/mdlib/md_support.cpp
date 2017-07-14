@@ -319,7 +319,7 @@ void compute_globals(FILE *fplog, gmx_global_stat_t gstat, t_commrec *cr, t_inpu
     /* Calculate center of mass velocity if necessary, also parallellized */
     if (bStopCM)
     {
-        calc_vcm_grp(0, mdatoms->homenr, mdatoms,
+        calc_vcm_grp(fplog,cr->dd ? cr->dd->gatindex : NULL, 0, mdatoms->homenr, mdatoms,
                      state->x, state->v, vcm);
     }
 
@@ -363,7 +363,7 @@ void compute_globals(FILE *fplog, gmx_global_stat_t gstat, t_commrec *cr, t_inpu
     if (bStopCM)
     {
         check_cm_grp(fplog, vcm, ir, 1);
-        do_stopcm_grp(0, mdatoms->homenr, mdatoms->cVCM,
+        do_stopcm_grp(fplog,cr->dd ? cr->dd->gatindex : NULL, 0, mdatoms->homenr, mdatoms->cVCM,
                       state->x, state->v, vcm);
         inc_nrnb(nrnb, eNR_STOPCM, mdatoms->homenr);
     }

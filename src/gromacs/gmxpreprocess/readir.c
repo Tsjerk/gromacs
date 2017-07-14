@@ -896,7 +896,7 @@ void check_ir(const char *mdparin, t_inputrec *ir, t_gromppopts *opts,
     {
         if (ir->nstcomm < 0)
         {
-            warning(wi, "If you want to remove the rotation around the center of mass, you should set comm_mode = Angular instead of setting nstcomm < 0. nstcomm is modified to its absolute value");
+            warning(wi, "If you want to remove the rotation around the center of mass, you should set comm_mode = Angular or RTC instead of setting nstcomm < 0. nstcomm is modified to its absolute value");
             ir->nstcomm = abs(ir->nstcomm);
         }
 
@@ -917,7 +917,7 @@ void check_ir(const char *mdparin, t_inputrec *ir, t_gromppopts *opts,
         }
     }
 
-    if (EI_STATE_VELOCITY(ir->eI) && ir->ePBC == epbcNONE && ir->comm_mode != ecmANGULAR)
+    if (EI_STATE_VELOCITY(ir->eI) && ir->ePBC == epbcNONE && (ir->comm_mode != ecmANGULAR || ir->comm_mode != ecmRTC))
     {
         warning_note(wi, "Tumbling and or flying ice-cubes: We are not removing rotation around center of mass in a non-periodic system. You should probably set comm_mode = ANGULAR.");
     }
@@ -2921,6 +2921,9 @@ static void calc_nrdf(gmx_mtop_t *mtop, t_inputrec *ir, char **gnames)
             case ecmANGULAR:
                 n_sub = 6;
                 break;
+            case ecmRTC:
+                n_sub = 6;
+                break;
             default:
                 n_sub = 0;
                 gmx_incons("Checking comm_mode");
@@ -3600,7 +3603,7 @@ void do_index(const char* mdparin, const char *ndx,
     bRest           =
         do_numbering(natoms, groups, nvcm, ptr1, grps, gnames, egcVCM,
                      restnm, nvcm == 0 ? egrptpALL_GENREST : egrptpPART, bVerbose, wi);
-    if (bRest)
+    if (bRest && !ir->comm_mode == ecmRTC)
     {
         warning(wi, "Some atoms are not part of any center of mass motion removal group.\n"
                 "This may lead to artifacts.\n"

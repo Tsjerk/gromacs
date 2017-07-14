@@ -262,7 +262,7 @@ enum {
 
 /* Center of mass motion selection */
 enum {
-    ecmLINEAR, ecmANGULAR, ecmNO, ecmNR
+    ecmLINEAR, ecmANGULAR, ecmRTC, ecmNO, ecmNR
 };
 
 /* New version of simulated annealing */
