@@ -1,7 +1,7 @@
 #
 # This file is part of the GROMACS molecular simulation package.
 #
-# Copyright (c) 2014,2015, by the GROMACS development team, led by
+# Copyright (c) 2014,2015,2016, by the GROMACS development team, led by
 # Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
 # and including many others, as listed in the AUTHORS file in the
 # top-level source directory and at http://www.gromacs.org.
@@ -49,9 +49,12 @@
 #       version string.
 #   LIBRARY_SOVERSION_MAJOR so major version for the built libraries.
 #       Should be increased for each binary incompatible release. In GROMACS,
-#       the typical policy is to increase it for each major/minor version
-#       change, but not for patch releases, even if the latter may not always
-#       be fully binary compatible.
+#       the typical policy is to increase it at the start of the development
+#       cycle for each major/minor version change, but not for patch releases,
+#       even if the latter may not always be fully binary compatible.
+#       Table of historical values
+#         GROMACS     5.0    0
+#         GROMACS     5.1    1
 #   LIBRARY_SOVERSION_MINOR so minor version for the built libraries.
 #       Should be increased for each release that changes only the implementation.
 #       In GROMACS, the typical policy is to increase it for each patch version
@@ -212,12 +215,12 @@ endif()
 # release that is going to be made from this branch.
 set(GMX_VERSION_MAJOR 5)
 set(GMX_VERSION_MINOR 1)
-set(GMX_VERSION_PATCH 0)
+set(GMX_VERSION_PATCH 4)
 # The suffix, on the other hand, is used mainly for betas and release
 # candidates, where it signifies the most recent such release from
 # this branch; it will be empty before the first such release, as well
 # as after the final release is out.
-set(GMX_VERSION_SUFFIX "-beta1")
+set(GMX_VERSION_SUFFIX "")
 
 # Conventionally with libtool, any ABI change must change the major
 # version number, the minor version number should change if it's just
@@ -229,7 +232,7 @@ set(GMX_VERSION_SUFFIX "-beta1")
 # code being able to dynamically link with a version of libgromacs
 # that might not work.
 set(LIBRARY_SOVERSION_MAJOR 1)
-set(LIBRARY_SOVERSION_MINOR 0)
+set(LIBRARY_SOVERSION_MINOR 4)
 set(LIBRARY_VERSION ${LIBRARY_SOVERSION_MAJOR}.${LIBRARY_SOVERSION_MINOR}.0)
 
 #####################################################################
@@ -253,7 +256,7 @@ set(REGRESSIONTEST_BRANCH "refs/heads/master")
 # each release. It's hard to test because it is only used for
 # REGRESSIONTEST_DOWNLOAD, which doesn't work until that tarball has
 # been placed on the server.
-set(REGRESSIONTEST_MD5SUM "6f8531a6e3c2a8912327b9cd450d8745" CACHE INTERNAL "MD5 sum of the regressiontests tarball")
+set(REGRESSIONTEST_MD5SUM "8902358ab19343f17997d1bf85f8e69c" CACHE INTERNAL "MD5 sum of the regressiontests tarball")
 
 math(EXPR GMX_VERSION_NUMERIC
      "${GMX_VERSION_MAJOR}*10000 + ${GMX_VERSION_MINOR}*100 + ${GMX_VERSION_PATCH}")

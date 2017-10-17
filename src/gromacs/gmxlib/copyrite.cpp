@@ -186,7 +186,11 @@ static void printCopyright(FILE *fp)
         "Sebastian Fritsch",
         "Gerrit Groenhof",
         "Christoph Junghans",
+        "Anca Hamuraru",
+        "Vincent Hindriksen",
+        "Dimitrios Karkoulis",
         "Peter Kasson",
+        "Jiri Kraus",
         "Carsten Kutzner",
         "Per Larsson",
         "Justin A. Lemkul",
@@ -201,6 +205,7 @@ static void printCopyright(FILE *fp)
         "Michael Shirts",
         "Alfons Sijbers",
         "Peter Tieleman",
+        "Teemu Virolainen",
         "Christian Wennberg",
         "Maarten Wolf"
     };
@@ -605,7 +610,12 @@ void please_cite(FILE *fp, const char *key)
           "S. Páll, M. J. Abraham, C. Kutzner, B. Hess, E. Lindahl",
           "Tackling Exascale Software Challenges in Molecular Dynamics Simulations with GROMACS",
           "In S. Markidis & E. Laure (Eds.), Solving Software Challenges for Exascale",
-          8759, 2015, "3–27" }
+          8759, 2015, "3-27" },
+        { "Abraham2015",
+          "M. J. Abraham, T. Murtola, R. Schulz, S. Páll, J. C. Smith, B. Hess, E. Lindahl",
+          "GROMACS: High performance molecular simulations through multi-level parallelism from laptops to supercomputers",
+          "SoftwareX",
+          1, 2015, "19-25" },
     };
 #define NSTR (int)asize(citedb)
 
@@ -718,6 +728,11 @@ static void gmx_print_version_info(FILE *fp)
 #else
     fprintf(fp, "GPU support:        disabled\n");
 #endif
+#if defined(GMX_GPU) && defined(GMX_USE_OPENCL)
+    fprintf(fp, "OpenCL support:     enabled\n");
+#else
+    fprintf(fp, "OpenCL support:     disabled\n");
+#endif
     /* A preprocessor trick to avoid duplicating logic from vec.h */
 #define gmx_stringify2(x) #x
 #define gmx_stringify(x) gmx_stringify2(x)
@@ -776,8 +791,14 @@ static void gmx_print_version_info(FILE *fp)
     fprintf(fp, "Boost version:      %d.%d.%d%s\n", BOOST_VERSION / 100000,
             BOOST_VERSION / 100 % 1000, BOOST_VERSION % 100,
             bExternalBoost ? " (external)" : " (internal)");
-#ifdef GMX_GPU
+#if defined(GMX_GPU)
+#ifdef GMX_USE_OPENCL
+    fprintf(fp, "OpenCL include dir: %s\n", OPENCL_INCLUDE_DIR);
+    fprintf(fp, "OpenCL library:     %s\n", OPENCL_LIBRARY);
+    fprintf(fp, "OpenCL version:     %s\n", OPENCL_VERSION_STRING);
+#else
     gmx_print_version_info_cuda_gpu(fp);
+#endif
 #endif
 }
 

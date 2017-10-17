@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2008,2009,2010,2011,2012,2013,2014, by the GROMACS development team, led by
+ * Copyright (c) 2008,2009,2010,2011,2012,2013,2014,2015, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -517,8 +517,8 @@ static float comm_cost_est(real limit, real cutoff,
         fprintf(debug,
                 "nc %2d %2d %2d %2d %2d vol pp %6.4f pbcdx %6.4f pme %9.3e tot %9.3e\n",
                 nc[XX], nc[YY], nc[ZZ], npme[XX], npme[YY],
-                comm_vol, cost_pbcdx, comm_pme,
-                3*natoms*(comm_vol + cost_pbcdx) + comm_pme);
+                comm_vol, cost_pbcdx, comm_pme/(3*natoms),
+                comm_vol + cost_pbcdx + comm_pme/(3*natoms));
     }
 
     return 3*natoms*(comm_vol + cost_pbcdx) + comm_pme;
@@ -599,8 +599,7 @@ static real optimize_ncells(FILE *fplog,
                             ivec nc)
 {
     int      npp, npme, ndiv, *div, *mdiv, d, nmax;
-    gmx_bool bExcl_pbcdx;
-    float    pbcdxr;
+    double   pbcdxr;
     real     limit;
     ivec     itry;
 
@@ -622,10 +621,12 @@ static real optimize_ncells(FILE *fplog,
 
     if (bInterCGBondeds)
     {
-        /* For Ewald exclusions pbc_dx is not called */
-        bExcl_pbcdx =
-            (IR_EXCL_FORCES(*ir) && !EEL_FULL(ir->coulombtype));
-        pbcdxr = (double)n_bonded_dx(mtop, bExcl_pbcdx)/(double)mtop->natoms;
+        /* If we can skip PBC for distance calculations in plain-C bondeds,
+         * we can save some time (e.g. 3D DD with pbc=xyz).
+         * Here we ignore SIMD bondeds as they always do (fast) PBC.
+         */
+        count_bonded_distances(mtop, ir, &pbcdxr, NULL);
+        pbcdxr /= (double)mtop->natoms;
     }
     else
     {
@@ -721,11 +722,6 @@ real dd_choose_grid(FILE *fplog,
         {
             if (cr->npmenodes > 0)
             {
-                if (cr->nnodes <= 2)
-                {
-                    gmx_fatal(FARGS,
-                              "Cannot have separate PME ranks with 2 or fewer ranks");
-                }
                 if (cr->npmenodes >= cr->nnodes)
                 {
                     gmx_fatal(FARGS,

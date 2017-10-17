@@ -3,7 +3,7 @@
  *
  * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
  * Copyright (c) 2001-2004, The GROMACS development team.
- * Copyright (c) 2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -47,6 +47,7 @@
 
 #include "gromacs/domdec/domdec.h"
 #include "gromacs/ewald/ewald.h"
+#include "gromacs/fileio/filenm.h"
 #include "gromacs/gmxlib/gpu_utils/gpu_utils.h"
 #include "gromacs/legacyheaders/copyrite.h"
 #include "gromacs/legacyheaders/force.h"
@@ -73,7 +74,6 @@
 #include "gromacs/mdlib/forcerec-threading.h"
 #include "gromacs/mdlib/nb_verlet.h"
 #include "gromacs/mdlib/nbnxn_atomdata.h"
-#include "gromacs/mdlib/nbnxn_consts.h"
 #include "gromacs/mdlib/nbnxn_gpu_data_mgmt.h"
 #include "gromacs/mdlib/nbnxn_search.h"
 #include "gromacs/mdlib/nbnxn_simd.h"
@@ -81,8 +81,10 @@
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/simd/simd.h"
 #include "gromacs/topology/mtop_util.h"
+#include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringutil.h"
 
 #include "nbnxn_gpu_jit_support.h"
 
@@ -1340,6 +1342,19 @@ static void make_nbf_tables(FILE *fp, const output_env_t oenv,
     }
 }
 
+/*!\brief If there's bonded interactions of type \c ftype1 or \c
+ * ftype2 present in the topology, build an array of the number of
+ * interactions present for each bonded interaction index found in the
+ * topology.
+ *
+ * \c ftype1 or \c ftype2 may be set to -1 to disable seeking for a
+ * valid type with that parameter.
+ *
+ * \c count will be reallocated as necessary to fit the largest bonded
+ * interaction index found, and its current size will be returned in
+ * \c ncount. It will contain zero for every bonded interaction index
+ * for which no interactions are present in the topology.
+ */
 static void count_tables(int ftype1, int ftype2, const gmx_mtop_t *mtop,
                          int *ncount, int **count)
 {
@@ -1347,22 +1362,28 @@ static void count_tables(int ftype1, int ftype2, const gmx_mtop_t *mtop,
     const t_ilist       *il;
     int                  mt, ftype, stride, i, j, tabnr;
 
+    // Loop over all moleculetypes
     for (mt = 0; mt < mtop->nmoltype; mt++)
     {
         molt = &mtop->moltype[mt];
+        // Loop over all interaction types
         for (ftype = 0; ftype < F_NRE; ftype++)
         {
+            // If the current interaction type is one of the types whose tables we're trying to count...
             if (ftype == ftype1 || ftype == ftype2)
             {
                 il     = &molt->ilist[ftype];
                 stride = 1 + NRAL(ftype);
+                // ... and there are actually some interactions for this type
                 for (i = 0; i < il->nr; i += stride)
                 {
+                    // Find out which table index the user wanted
                     tabnr = mtop->ffparams.iparams[il->iatoms[i]].tab.table;
                     if (tabnr < 0)
                     {
                         gmx_fatal(FARGS, "A bonded table number is smaller than 0: %d\n", tabnr);
                     }
+                    // Make room for this index in the data structure
                     if (tabnr >= *ncount)
                     {
                         srenew(*count, tabnr+1);
@@ -1372,6 +1393,7 @@ static void count_tables(int ftype1, int ftype2, const gmx_mtop_t *mtop,
                         }
                         *ncount = tabnr+1;
                     }
+                    // Record that this table index is used and must have a valid file
                     (*count)[tabnr]++;
                 }
             }
@@ -1379,13 +1401,23 @@ static void count_tables(int ftype1, int ftype2, const gmx_mtop_t *mtop,
     }
 }
 
+/*!\brief If there's bonded interactions of flavour \c tabext and type
+ * \c ftype1 or \c ftype2 present in the topology, seek them in the
+ * list of filenames passed to mdrun, and make bonded tables from
+ * those files.
+ *
+ * \c ftype1 or \c ftype2 may be set to -1 to disable seeking for a
+ * valid type with that parameter.
+ *
+ * A fatal error occurs if no matching filename is found.
+ */
 static bondedtable_t *make_bonded_tables(FILE *fplog,
                                          int ftype1, int ftype2,
                                          const gmx_mtop_t *mtop,
-                                         const char *basefn, const char *tabext)
+                                         const t_filenm *tabbfnm,
+                                         const char *tabext)
 {
-    int            i, ncount, *count;
-    char           tabfn[STRLEN];
+    int            ncount, *count;
     bondedtable_t *tab;
 
     tab = NULL;
@@ -1394,17 +1426,41 @@ static bondedtable_t *make_bonded_tables(FILE *fplog,
     count  = NULL;
     count_tables(ftype1, ftype2, mtop, &ncount, &count);
 
+    // Are there any relevant tabulated bond interactions?
     if (ncount > 0)
     {
         snew(tab, ncount);
-        for (i = 0; i < ncount; i++)
+        for (int i = 0; i < ncount; i++)
         {
+            // Do any interactions exist that requires this table?
             if (count[i] > 0)
             {
-                sprintf(tabfn, "%s", basefn);
-                sprintf(tabfn + strlen(basefn) - strlen(ftp2ext(efXVG)) - 1, "_%s%d.%s",
-                        tabext, i, ftp2ext(efXVG));
-                tab[i] = make_bonded_table(fplog, tabfn, NRAL(ftype1)-2);
+                // This pattern enforces the current requirement that
+                // table filenames end in a characteristic sequence
+                // before the file type extension, and avoids table 13
+                // being recognized and used for table 1.
+                std::string patternToFind = gmx::formatString("_%s%d.%s", tabext, i, ftp2ext(efXVG));
+                bool        madeTable     = false;
+                for (int j = 0; j < tabbfnm->nfiles && !madeTable; ++j)
+                {
+                    std::string filename(tabbfnm->fns[j]);
+                    if (gmx::endsWith(filename, patternToFind))
+                    {
+                        // Finally read the table from the file found
+                        tab[i]    = make_bonded_table(fplog, tabbfnm->fns[j], NRAL(ftype1)-2);
+                        madeTable = true;
+                    }
+                }
+                if (!madeTable)
+                {
+                    bool isPlural = (ftype2 != -1);
+                    gmx_fatal(FARGS, "Tabulated interaction of type '%s%s%s' with index %d cannot be used because no table file whose name matched '%s' was passed via the gmx mdrun -tableb command-line option.",
+                              interaction_function[ftype1].longname,
+                              isPlural ? "' or '" : "",
+                              isPlural ? interaction_function[ftype2].longname : "",
+                              i,
+                              patternToFind.c_str());
+                }
             }
         }
         sfree(count);
@@ -1541,16 +1597,38 @@ gmx_bool can_use_allvsall(const t_inputrec *ir, gmx_bool bPrintNote, t_commrec *
 }
 
 
-gmx_bool nbnxn_acceleration_supported(FILE             *fplog,
-                                      const t_commrec  *cr,
-                                      const t_inputrec *ir,
-                                      gmx_bool          bGPU)
+gmx_bool nbnxn_gpu_acceleration_supported(FILE             *fplog,
+                                          const t_commrec  *cr,
+                                          const t_inputrec *ir,
+                                          gmx_bool          bRerunMD)
 {
-    if (!bGPU && (ir->vdwtype == evdwPME && ir->ljpme_combination_rule == eljpmeLB))
+    if (bRerunMD && ir->opts.ngener > 1)
     {
-        md_print_warn(cr, fplog, "LJ-PME with Lorentz-Berthelot is not supported with %s, falling back to %s\n",
-                      bGPU ? "GPUs" : "SIMD kernels",
-                      bGPU ? "CPU only" : "plain-C kernels");
+        /* Rerun execution time is dominated by I/O and pair search,
+         * so GPUs are not very useful, plus they do not support more
+         * than one energy group. If the user requested GPUs
+         * explicitly, a fatal error is given later.  With non-reruns,
+         * we fall back to a single whole-of system energy group
+         * (which runs much faster than a multiple-energy-groups
+         * implementation would), and issue a note in the .log
+         * file. Users can re-run if they want the information. */
+        md_print_warn(cr, fplog, "Rerun with energy groups is not implemented for GPUs, falling back to the CPU\n");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+gmx_bool nbnxn_simd_supported(FILE             *fplog,
+                              const t_commrec  *cr,
+                              const t_inputrec *ir)
+{
+    if (ir->vdwtype == evdwPME && ir->ljpme_combination_rule == eljpmeLB)
+    {
+        /* LJ PME with LB combination rule does 7 mesh operations.
+         * This so slow that we don't compile SIMD non-bonded kernels
+         * for that. */
+        md_print_warn(cr, fplog, "LJ-PME with Lorentz-Berthelot is not supported with SIMD kernels, falling back to plain C kernels\n");
         return FALSE;
     }
 
@@ -1724,11 +1802,8 @@ static void pick_nbnxn_kernel(FILE                *fp,
 
     if (*kernel_type == nbnxnkNotSet)
     {
-        /* LJ PME with LB combination rule does 7 mesh operations.
-         * This so slow that we don't compile SIMD non-bonded kernels for that.
-         */
         if (use_simd_kernels &&
-            nbnxn_acceleration_supported(fp, cr, ir, FALSE))
+            nbnxn_simd_supported(fp, cr, ir))
         {
             pick_nbnxn_kernel_cpu(ir, kernel_type, ewald_excl);
         }
@@ -1742,7 +1817,7 @@ static void pick_nbnxn_kernel(FILE                *fp,
     {
         fprintf(fp, "\nUsing %s %dx%d non-bonded kernels\n\n",
                 lookup_nbnxn_kernel_name(*kernel_type),
-                nbnxn_kernel_pairlist_simple(*kernel_type) ? NBNXN_CPU_CLUSTER_I_SIZE : NBNXN_GPU_CLUSTER_SIZE,
+                nbnxn_kernel_to_ci_size(*kernel_type),
                 nbnxn_kernel_to_cj_size(*kernel_type));
 
         if (nbnxnk4x4_PlainC == *kernel_type ||
@@ -1801,8 +1876,8 @@ static void pick_nbnxn_resources(FILE                *fp,
                the MPI rank makes sense. */
             gmx_fatal(FARGS, "On rank %d failed to initialize GPU #%d: %s",
                       cr->nodeid,
-                      get_cuda_gpu_device_id(&hwinfo->gpu_info, gpu_opt,
-                                             cr->rank_pp_intranode),
+                      get_gpu_device_id(&hwinfo->gpu_info, gpu_opt,
+                                        cr->rank_pp_intranode),
                       gpu_err_str);
         }
 
@@ -2077,40 +2152,6 @@ init_interaction_const(FILE                       *fp,
     *interaction_const = ic;
 }
 
-/*! \brief Manage initialization within the NBNXN module of
- * run-time constants.
- */
-static void
-initialize_gpu_constants(const t_commrec gmx_unused      *cr,
-                         interaction_const_t             *interaction_const,
-                         const struct nonbonded_verlet_t *nbv)
-{
-    if (nbv != NULL && nbv->bUseGPU)
-    {
-        nbnxn_gpu_init_const(nbv->gpu_nbv, interaction_const, nbv->grp);
-
-        /* With tMPI + GPUs some ranks may be sharing GPU(s) and therefore
-         * also sharing texture references. To keep the code simple, we don't
-         * treat texture references as shared resources, but this means that
-         * the coulomb_tab and nbfp texture refs will get updated by multiple threads.
-         * Hence, to ensure that the non-bonded kernels don't start before all
-         * texture binding operations are finished, we need to wait for all ranks
-         * to arrive here before continuing.
-         *
-         * Note that we could omit this barrier if GPUs are not shared (or
-         * texture objects are used), but as this is initialization code, there
-         * is no point in complicating things.
-         */
-#ifdef GMX_THREAD_MPI
-        if (PAR(cr))
-        {
-            gmx_barrier(cr);
-        }
-#endif  /* GMX_THREAD_MPI */
-    }
-
-}
-
 static void init_nb_verlet(FILE                *fp,
                            nonbonded_verlet_t **nb_verlet,
                            gmx_bool             bFEP_NonBonded,
@@ -2135,7 +2176,8 @@ static void init_nb_verlet(FILE                *fp,
                          &bEmulateGPU,
                          fr->gpu_opt);
 
-    nbv->nbs = NULL;
+    nbv->nbs             = NULL;
+    nbv->min_ci_balanced = 0;
 
     nbv->ngrp = (DOMAINDECOMP(cr) ? 2 : 1);
     for (i = 0; i < nbv->ngrp; i++)
@@ -2173,50 +2215,6 @@ static void init_nb_verlet(FILE                *fp,
             }
         }
     }
-
-    if (nbv->bUseGPU)
-    {
-        nbnxn_gpu_compile_kernels(cr->rank_pp_intranode, cr->nodeid, &fr->hwinfo->gpu_info, fr->gpu_opt, fr->ic);
-
-        /* init the NxN GPU data; the last argument tells whether we'll have
-         * both local and non-local NB calculation on GPU */
-        nbnxn_gpu_init(fp, &nbv->gpu_nbv,
-                       &fr->hwinfo->gpu_info, fr->gpu_opt,
-                       cr->rank_pp_intranode,
-                       (nbv->ngrp > 1) && !bHybridGPURun);
-
-        if ((env = getenv("GMX_NB_MIN_CI")) != NULL)
-        {
-            char *end;
-
-            nbv->min_ci_balanced = strtol(env, &end, 10);
-            if (!end || (*end != 0) || nbv->min_ci_balanced <= 0)
-            {
-                gmx_fatal(FARGS, "Invalid value passed in GMX_NB_MIN_CI=%s, positive integer required", env);
-            }
-
-            if (debug)
-            {
-                fprintf(debug, "Neighbor-list balancing parameter: %d (passed as env. var.)\n",
-                        nbv->min_ci_balanced);
-            }
-        }
-        else
-        {
-            nbv->min_ci_balanced = nbnxn_gpu_min_ci_balanced(nbv->gpu_nbv);
-            if (debug)
-            {
-                fprintf(debug, "Neighbor-list balancing parameter: %d (auto-adjusted to the number of GPU multi-processors)\n",
-                        nbv->min_ci_balanced);
-            }
-        }
-    }
-    else
-    {
-        nbv->min_ci_balanced = 0;
-    }
-
-    *nb_verlet = nbv;
 
     nbnxn_init_search(&nbv->nbs,
                       DOMAINDECOMP(cr) ? &cr->dd->nc : NULL,
@@ -2282,6 +2280,68 @@ static void init_nb_verlet(FILE                *fp,
             nbv->grp[i].nbat = nbv->grp[0].nbat;
         }
     }
+
+    if (nbv->bUseGPU)
+    {
+        /* init the NxN GPU data; the last argument tells whether we'll have
+         * both local and non-local NB calculation on GPU */
+        nbnxn_gpu_init(fp, &nbv->gpu_nbv,
+                       &fr->hwinfo->gpu_info,
+                       fr->gpu_opt,
+                       fr->ic,
+                       nbv->grp,
+                       cr->rank_pp_intranode,
+                       cr->nodeid,
+                       (nbv->ngrp > 1) && !bHybridGPURun);
+
+        /* With tMPI + GPUs some ranks may be sharing GPU(s) and therefore
+         * also sharing texture references. To keep the code simple, we don't
+         * treat texture references as shared resources, but this means that
+         * the coulomb_tab and nbfp texture refs will get updated by multiple threads.
+         * Hence, to ensure that the non-bonded kernels don't start before all
+         * texture binding operations are finished, we need to wait for all ranks
+         * to arrive here before continuing.
+         *
+         * Note that we could omit this barrier if GPUs are not shared (or
+         * texture objects are used), but as this is initialization code, there
+         * is no point in complicating things.
+         */
+#ifdef GMX_THREAD_MPI
+        if (PAR(cr))
+        {
+            gmx_barrier(cr);
+        }
+#endif  /* GMX_THREAD_MPI */
+
+        if ((env = getenv("GMX_NB_MIN_CI")) != NULL)
+        {
+            char *end;
+
+            nbv->min_ci_balanced = strtol(env, &end, 10);
+            if (!end || (*end != 0) || nbv->min_ci_balanced <= 0)
+            {
+                gmx_fatal(FARGS, "Invalid value passed in GMX_NB_MIN_CI=%s, positive integer required", env);
+            }
+
+            if (debug)
+            {
+                fprintf(debug, "Neighbor-list balancing parameter: %d (passed as env. var.)\n",
+                        nbv->min_ci_balanced);
+            }
+        }
+        else
+        {
+            nbv->min_ci_balanced = nbnxn_gpu_min_ci_balanced(nbv->gpu_nbv);
+            if (debug)
+            {
+                fprintf(debug, "Neighbor-list balancing parameter: %d (auto-adjusted to the number of GPU multi-processors)\n",
+                        nbv->min_ci_balanced);
+            }
+        }
+
+    }
+
+    *nb_verlet = nbv;
 }
 
 gmx_bool usingGpu(nonbonded_verlet_t *nbv)
@@ -2300,7 +2360,7 @@ void init_forcerec(FILE              *fp,
                    const char        *tabfn,
                    const char        *tabafn,
                    const char        *tabpfn,
-                   const char        *tabbfn,
+                   const t_filenm    *tabbfnm,
                    const char        *nbpu_opt,
                    gmx_bool           bNoSolvOpt,
                    real               print_force)
@@ -2617,6 +2677,7 @@ void init_forcerec(FILE              *fp,
             break;
 
         case eelPME:
+        case eelP3M_AD:
         case eelEWALD:
             fr->nbkernel_elec_interaction = GMX_NBKERNEL_ELEC_EWALD;
             break;
@@ -3155,17 +3216,23 @@ void init_forcerec(FILE              *fp,
         make_wall_tables(fp, oenv, ir, tabfn, &mtop->groups, fr);
     }
 
-    if (fcd && tabbfn)
+    if (fcd && tabbfnm)
     {
-        fcd->bondtab  = make_bonded_tables(fp,
-                                           F_TABBONDS, F_TABBONDSNC,
-                                           mtop, tabbfn, "b");
-        fcd->angletab = make_bonded_tables(fp,
-                                           F_TABANGLES, -1,
-                                           mtop, tabbfn, "a");
-        fcd->dihtab   = make_bonded_tables(fp,
-                                           F_TABDIHS, -1,
-                                           mtop, tabbfn, "d");
+        // Need to catch std::bad_alloc
+        // TODO Don't need to catch this here, when merging with master branch
+        try
+        {
+            fcd->bondtab  = make_bonded_tables(fp,
+                                               F_TABBONDS, F_TABBONDSNC,
+                                               mtop, tabbfnm, "b");
+            fcd->angletab = make_bonded_tables(fp,
+                                               F_TABANGLES, -1,
+                                               mtop, tabbfnm, "a");
+            fcd->dihtab   = make_bonded_tables(fp,
+                                               F_TABDIHS, -1,
+                                               mtop, tabbfnm, "d");
+        }
+        GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR;
     }
     else
     {
@@ -3229,10 +3296,9 @@ void init_forcerec(FILE              *fp,
     /* Initialize the thread working data for bonded interactions */
     init_bonded_threading(fp, fr, mtop->groups.grps[egcENER].nr);
 
-    snew(fr->excl_load, fr->nthreads+1);
-
     /* fr->ic is used both by verlet and group kernels (to some extent) now */
     init_interaction_const(fp, &fr->ic, fr);
+    init_interaction_const_tables(fp, fr->ic, rtab);
 
     if (fr->cutoff_scheme == ecutsVERLET)
     {
@@ -3243,10 +3309,6 @@ void init_forcerec(FILE              *fp,
 
         init_nb_verlet(fp, &fr->nbv, bFEP_NonBonded, ir, fr, cr, nbpu_opt);
     }
-
-    init_interaction_const_tables(fp, fr->ic, rtab);
-
-    initialize_gpu_constants(cr, fr->ic, fr->nbv);
 
     if (ir->eDispCorr != edispcNO)
     {
@@ -3277,48 +3339,6 @@ void pr_forcerec(FILE *fp, t_forcerec *fr)
     pr_real(fp, fr->rcoulomb);
 
     fflush(fp);
-}
-
-void forcerec_set_excl_load(t_forcerec           *fr,
-                            const gmx_localtop_t *top)
-{
-    const int *ind, *a;
-    int        t, i, j, ntot, n, ntarget;
-
-    ind = top->excls.index;
-    a   = top->excls.a;
-
-    ntot = 0;
-    for (i = 0; i < top->excls.nr; i++)
-    {
-        for (j = ind[i]; j < ind[i+1]; j++)
-        {
-            if (a[j] > i)
-            {
-                ntot++;
-            }
-        }
-    }
-
-    fr->excl_load[0] = 0;
-    n                = 0;
-    i                = 0;
-    for (t = 1; t <= fr->nthreads; t++)
-    {
-        ntarget = (ntot*t)/fr->nthreads;
-        while (i < top->excls.nr && n < ntarget)
-        {
-            for (j = ind[i]; j < ind[i+1]; j++)
-            {
-                if (a[j] > i)
-                {
-                    n++;
-                }
-            }
-            i++;
-        }
-        fr->excl_load[t] = i;
-    }
 }
 
 /* Frees GPU memory and destroys the GPU context.

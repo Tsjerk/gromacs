@@ -3,7 +3,7 @@
  *
  * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
  * Copyright (c) 2001-2004, The GROMACS development team.
- * Copyright (c) 2011,2012,2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2011,2012,2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -76,7 +76,6 @@
 #include "gromacs/math/calculate-ewald-splitting-coefficient.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdlib/calc_verletbuf.h"
-#include "gromacs/mdlib/nbnxn_consts.h"
 #include "gromacs/mdlib/nbnxn_search.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pulling/pull.h"
@@ -513,7 +512,9 @@ static void prepare_verlet_scheme(FILE                           *fplog,
                                   gmx_bool                        bUseGPU)
 {
     /* For NVE simulations, we will retain the initial list buffer */
-    if (ir->verletbuf_tol > 0 && !(EI_MD(ir->eI) && ir->etc == etcNO))
+    if (EI_DYNAMICS(ir->eI) &&
+        ir->verletbuf_tol > 0 &&
+        !(EI_MD(ir->eI) && ir->etc == etcNO))
     {
         /* Update the Verlet buffer size for the current run setup */
         verletbuf_list_setup_t ls;
@@ -604,7 +605,7 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
              int repl_ex_seed, real pforce, real cpt_period, real max_hours,
              int imdport, unsigned long Flags)
 {
-    gmx_bool                  bForceUseGPU, bTryUseGPU, bRerunMD, bCantUseGPU;
+    gmx_bool                  bForceUseGPU, bTryUseGPU, bRerunMD;
     t_inputrec               *inputrec;
     t_state                  *state = NULL;
     matrix                    box;
@@ -647,17 +648,6 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
     bRerunMD     = (Flags & MD_RERUN);
     bForceUseGPU = (strncmp(nbpu_opt, "gpu", 3) == 0);
     bTryUseGPU   = (strncmp(nbpu_opt, "auto", 4) == 0) || bForceUseGPU;
-    /* Rerun execution time is dominated by I/O and pair search, so
-     * GPUs are not very useful, plus they do not support more than
-     * one energy group. Don't select them when they can't be used,
-     * unless the user requested it, then fatal_error is called later.
-     *
-     * TODO it would be nice to notify the user that if this check
-     * causes GPUs not to be used that this is what is happening, and
-     * why, but that will be easier to do after some future
-     * cleanup. */
-    bCantUseGPU = bRerunMD && (inputrec->opts.ngener > 1);
-    bTryUseGPU  = bTryUseGPU && !(bCantUseGPU && !bForceUseGPU);
 
     /* Detect hardware, gather information. This is an operation that is
      * global for this process (MPI rank). */
@@ -668,6 +658,7 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
     if (fplog != NULL)
     {
         /* Print references after all software/hardware printing */
+        please_cite(fplog, "Abraham2015");
         please_cite(fplog, "Pall2015");
         please_cite(fplog, "Pronk2013");
         please_cite(fplog, "Hess2008b");
@@ -694,7 +685,7 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
              * update the message text and the content of nbnxn_acceleration_supported.
              */
             if (bUseGPU &&
-                !nbnxn_acceleration_supported(fplog, cr, inputrec, bUseGPU))
+                !nbnxn_gpu_acceleration_supported(fplog, cr, inputrec, bRerunMD))
             {
                 /* Fallback message printed by nbnxn_acceleration_supported */
                 if (bForceUseGPU)
@@ -745,31 +736,20 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
     }
 
     /* Check and update the hardware options for internal consistency */
-    check_and_update_hw_opt_1(hw_opt, SIMMASTER(cr));
+    check_and_update_hw_opt_1(hw_opt, cr);
 
     /* Early check for externally set process affinity. */
     gmx_check_thread_affinity_set(fplog, cr,
                                   hw_opt, hwinfo->nthreads_hw_avail, FALSE);
-    if (SIMMASTER(cr))
-    {
 
 #ifdef GMX_THREAD_MPI
+    if (SIMMASTER(cr))
+    {
         if (cr->npmenodes > 0 && hw_opt->nthreads_tmpi <= 0)
         {
             gmx_fatal(FARGS, "You need to explicitly specify the number of MPI threads (-ntmpi) when using separate PME ranks");
         }
-#endif
 
-        if (hw_opt->nthreads_omp_pme != hw_opt->nthreads_omp &&
-            cr->npmenodes <= 0)
-        {
-            gmx_fatal(FARGS, "You need to explicitly specify the number of PME ranks (-npme) when using different number of OpenMP threads for PP and PME ranks");
-        }
-    }
-
-#ifdef GMX_THREAD_MPI
-    if (SIMMASTER(cr))
-    {
         /* Since the master knows the cut-off scheme, update hw_opt for this.
          * This is done later for normal MPI and also once more with tMPI
          * for all tMPI ranks.
@@ -780,11 +760,7 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
         hw_opt->nthreads_tmpi = get_nthreads_mpi(hwinfo,
                                                  hw_opt,
                                                  inputrec, mtop,
-                                                 cr, fplog);
-        if (hw_opt->nthreads_tot > 0 && hw_opt->nthreads_omp <= 0)
-        {
-            hw_opt->nthreads_omp = hw_opt->nthreads_tot/hw_opt->nthreads_tmpi;
-        }
+                                                 cr, fplog, bUseGPU);
 
         if (hw_opt->nthreads_tmpi > 1)
         {
@@ -853,7 +829,7 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
                   "but %s was compiled without threads or MPI enabled"
 #else
 #ifdef GMX_THREAD_MPI
-                  "but the number of threads (option -nt) is 1"
+                  "but the number of MPI-threads (option -ntmpi) is not set or is 1"
 #else
                   "but %s was not started through mpirun/mpiexec or only one rank was requested through mpirun/mpiexec"
 #endif
@@ -1047,6 +1023,9 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
     /* Check and update hw_opt for the cut-off scheme */
     check_and_update_hw_opt_2(hw_opt, inputrec->cutoff_scheme);
 
+    /* Check and update hw_opt for the number of MPI ranks */
+    check_and_update_hw_opt_3(hw_opt);
+
     gmx_omp_nthreads_init(fplog, cr,
                           hwinfo->nthreads_hw_avail,
                           hw_opt->nthreads_omp,
@@ -1077,6 +1056,10 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
     /* check consistency across ranks of things like SIMD
      * support and number of GPUs selected */
     gmx_check_hw_runconf_consistency(fplog, hwinfo, cr, hw_opt, bUseGPU);
+
+    /* Now that we know the setup is consistent, check for efficiency */
+    check_resource_division_efficiency(hwinfo, hw_opt, Flags & MD_NTOMPSET,
+                                       cr, fplog);
 
     if (DOMAINDECOMP(cr))
     {
@@ -1118,7 +1101,7 @@ int mdrunner(gmx_hw_opt_t *hw_opt,
                       opt2fn("-table", nfile, fnm),
                       opt2fn("-tabletf", nfile, fnm),
                       opt2fn("-tablep", nfile, fnm),
-                      opt2fn("-tableb", nfile, fnm),
+                      getFilenm("-tableb", nfile, fnm),
                       nbpu_opt,
                       FALSE,
                       pforce);

@@ -44,6 +44,12 @@
 #ifndef NBNXN_CUDA_KERNEL_UTILS_CUH
 #define NBNXN_CUDA_KERNEL_UTILS_CUH
 
+
+#if defined HAVE_CUDA_TEXOBJ_SUPPORT && __CUDA_ARCH__ >= 300
+/* Note: convenience macro, needs to be undef-ed at the end of the file. */
+#define USE_TEXOBJ
+#endif
+
 #define WARP_SIZE_POW2_EXPONENT     (5)
 #define CL_SIZE_POW2_EXPONENT       (3)  /* change this together with GPU_NS_CLUSTER_SIZE !*/
 #define CL_SIZE_SQ                  (CL_SIZE * CL_SIZE)
@@ -52,9 +58,6 @@
 #define ONE_SIXTH_F     0.16666667f
 #define ONE_TWELVETH_F  0.08333333f
 
-
-/*! i-cluster interaction mask for a super-cluster with all NCL_PER_SUPERCL bits set */
-const unsigned supercl_interaction_mask = ((1U << NCL_PER_SUPERCL) - 1U);
 
 /*! Apply force switch,  force + energy version. */
 static inline __device__
@@ -621,5 +624,7 @@ void reduce_energy_warp_shfl(float E_lj, float E_el,
     }
 }
 #endif /* __CUDA_ARCH__ */
+
+#undef USE_TEXOBJ
 
 #endif /* NBNXN_CUDA_KERNEL_UTILS_CUH */

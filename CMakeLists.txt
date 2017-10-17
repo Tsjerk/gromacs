@@ -1,7 +1,7 @@
 #
 # This file is part of the GROMACS molecular simulation package.
 #
-# Copyright (c) 2009,2010,2011,2012,2013,2014,2015, by the GROMACS development team, led by
+# Copyright (c) 2009,2010,2011,2012,2013,2014,2015,2016, by the GROMACS development team, led by
 # Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
 # and including many others, as listed in the AUTHORS file in the
 # top-level source directory and at http://www.gromacs.org.
@@ -65,6 +65,7 @@ include(gmxBuildTypeReference)
 include(gmxBuildTypeProfile)
 include(gmxBuildTypeTSAN)
 include(gmxBuildTypeASAN)
+include(gmxBuildTypeMSAN)
 include(gmxBuildTypeReleaseWithAssert)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -165,6 +166,8 @@ option(GMX_COOL_QUOTES "Enable GROMACS cool quotes" ON)
 mark_as_advanced(GMX_COOL_QUOTES)
 gmx_add_cache_dependency(GMX_COOL_QUOTES BOOL "NOT GMX_FAHCORE" OFF)
 
+option(GMX_USE_OPENCL "Enable OpenCL acceleration" OFF)
+
 # Decide on GPU settings based on user-settings and GPU/CUDA detection.
 # We support CUDA >=v4.0 on *nix, but <= v4.1 doesn't work with MSVC
 if(MSVC)
@@ -173,7 +176,21 @@ else()
     set(REQUIRED_CUDA_VERSION 4.0)
 endif()
 set(REQUIRED_CUDA_COMPUTE_CAPABILITY 2.0)
-include(gmxManageGPU)
+
+# OpenCL required version: 1.1 or newer
+set(REQUIRED_OPENCL_MIN_VERSION 1.1)
+
+if(NOT GMX_USE_OPENCL)
+    # CUDA detection is done only if GMX_USE_OPENCL is OFF
+    include(gmxManageGPU)
+else()
+    #Now the OpenCL path
+    if(GMX_GPU)
+        include(gmxManageOpenCL)
+    else(GMX_GPU)
+        message(FATAL_ERROR "OpenCL requested but GPU option is not enabled (try -DGMX_GPU=on) ")
+    endif(GMX_GPU)
+endif()
 
 include(gmxDetectSimd)
 gmx_detect_simd(GMX_SUGGESTED_SIMD)
@@ -356,7 +373,8 @@ check_cxx_symbol_exists(rsqrtf            math.h       HAVE_RSQRTF)
 check_cxx_symbol_exists(sqrtf             math.h       HAVE_SQRTF)
 
 include(CheckLibraryExists)
-check_library_exists(m sqrt "" HAVE_LIBM)
+find_library(HAVE_LIBM m)
+mark_as_advanced(HAVE_LIBM)
 check_library_exists(rt clock_gettime "" HAVE_CLOCK_GETTIME)
 check_library_exists(m feenableexcept "" HAVE_FEENABLEEXCEPT)
 
@@ -436,7 +454,7 @@ mark_as_advanced(GMX_EXTRAE)
 if (GMX_EXTRAE)
   find_package(EXTRAE)
   if(EXTRAE_FOUND)
-    include_directories(${EXTRAE_INCLUDE_DIR})
+    include_directories(SYSTEM ${EXTRAE_INCLUDE_DIR})
     set(HAVE_EXTRAE 1)
   else()
     message(FATAL_ERROR "EXTRAE library was not found. Please add the correct path to CMAKE_PREFIX_PATH")
@@ -453,7 +471,7 @@ if (GMX_X11)
                 "Set GMX_X11=OFF to compile without X11 support. "
                 "gmx view will not be available.")
     endif()
-    include_directories(${X11_INCLUDE_DIR})
+    include_directories(SYSTEM ${X11_INCLUDE_DIR})
 endif()
 
 include(ThreadMPI)
@@ -474,6 +492,8 @@ endif()
 if(GMX_GPU)
     # now that we have detected the dependencies, do the second configure pass
     gmx_gpu_setup()
+else()
+    mark_as_advanced(CUDA_HOST_COMPILER)
 endif()
 
 if(CYGWIN)
@@ -775,6 +795,7 @@ set(MAN_INSTALL_DIR       share/man)
 set(CMAKE_INSTALL_DIR     share/cmake)
 # TODO: Make GMXRC adapt if this is changed
 set(PKGCONFIG_INSTALL_DIR ${LIB_INSTALL_DIR}/pkgconfig)
+set(OCL_INSTALL_DIR       ${DATA_INSTALL_DIR}/opencl)
 set(INCL_INSTALL_DIR      include)
 
 list(APPEND INSTALLED_HEADER_INCLUDE_DIRS ${INCL_INSTALL_DIR})

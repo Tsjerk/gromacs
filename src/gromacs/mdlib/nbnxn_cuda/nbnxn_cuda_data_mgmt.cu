@@ -70,11 +70,15 @@
 
 static bool bUseCudaEventBlockingSync = false; /* makes the CPU thread block */
 
-/* This is a heuristically determined parameter for the Fermi architecture for
- * the minimum size of ci lists by multiplying this constant with the # of
- * multiprocessors on the current device.
+/* This is a heuristically determined parameter for the Fermi, Kepler
+ * and Maxwell architectures for the minimum size of ci lists by multiplying
+ * this constant with the # of multiprocessors on the current device.
+ * Since the maximum number of blocks per multiprocessor is 16, the ideal
+ * count for small systems is 32 or 48 blocks per multiprocessor. Because
+ * there is a bit of fluctuations in the generated block counts, we use
+ * a target of 44 instead of the ideal value of 48.
  */
-static unsigned int gpu_min_ci_balanced_factor = 40;
+static unsigned int gpu_min_ci_balanced_factor = 44;
 
 /* Functions from nbnxn_cuda.cu */
 extern void nbnxn_cuda_set_cacheconfig(gmx_device_info_t *devinfo);
@@ -118,6 +122,15 @@ static void nbnxn_cuda_free_nbparam_table(cu_nbparam_t            *nbparam,
                                           const gmx_device_info_t *dev_info);
 
 
+
+#ifdef HAVE_CUDA_TEXOBJ_SUPPORT
+static bool use_texobj(const gmx_device_info_t *dev_info)
+{
+    /* Only device CC >= 3.0 (Kepler and later) support texture objects */
+    return (dev_info->prop.major >= 3);
+}
+#endif
+
 /*! Tabulates the Ewald Coulomb force and initializes the size/scale
     and the table GPU array. If called with an already allocated table,
     it just re-uploads the table.
@@ -141,7 +154,7 @@ static void init_ewald_coulomb_force_table(const interaction_const_t *ic,
 
 #ifdef HAVE_CUDA_TEXOBJ_SUPPORT
     /* Only device CC >= 3.0 (Kepler and later) support texture objects */
-    if (dev_info->prop.major >= 3)
+    if (use_texobj(dev_info))
     {
         cudaResourceDesc rd;
         memset(&rd, 0, sizeof(rd));
@@ -372,7 +385,7 @@ static void init_nbparam(cu_nbparam_t              *nbp,
 
 #ifdef HAVE_CUDA_TEXOBJ_SUPPORT
     /* Only device CC >= 3.0 (Kepler and later) support texture objects */
-    if (dev_info->prop.major >= 3)
+    if (use_texobj(dev_info))
     {
         cudaResourceDesc rd;
         cudaTextureDesc  td;
@@ -518,12 +531,27 @@ static void init_timings(gmx_wallclock_gpu_t *t)
     }
 }
 
-void nbnxn_gpu_init(FILE                 *fplog,
-                    gmx_nbnxn_cuda_t    **p_nb,
-                    const gmx_gpu_info_t *gpu_info,
-                    const gmx_gpu_opt_t  *gpu_opt,
-                    int                   my_gpu_index,
-                    gmx_bool              bLocalAndNonlocal)
+/*! Initializes simulation constant data. */
+static void nbnxn_cuda_init_const(gmx_nbnxn_cuda_t               *nb,
+                                  const interaction_const_t      *ic,
+                                  const nonbonded_verlet_group_t *nbv_group)
+{
+    init_atomdata_first(nb->atdat, nbv_group[0].nbat->ntype);
+    init_nbparam(nb->nbparam, ic, nbv_group[0].nbat, nb->dev_info);
+
+    /* clear energy and shift force outputs */
+    nbnxn_cuda_clear_e_fshift(nb);
+}
+
+void nbnxn_gpu_init(FILE                      *fplog,
+                    gmx_nbnxn_cuda_t         **p_nb,
+                    const gmx_gpu_info_t      *gpu_info,
+                    const gmx_gpu_opt_t       *gpu_opt,
+                    const interaction_const_t *ic,
+                    nonbonded_verlet_group_t  *nbv_grp,
+                    int                        my_gpu_index,
+                    int                        /*rank*/,
+                    gmx_bool                   bLocalAndNonlocal)
 {
     cudaError_t       stat;
     gmx_nbnxn_cuda_t *nb;
@@ -560,7 +588,7 @@ void nbnxn_gpu_init(FILE                 *fplog,
     init_plist(nb->plist[eintLocal]);
 
     /* set device info, just point it to the right GPU among the detected ones */
-    nb->dev_info = &gpu_info->gpu_dev[get_cuda_gpu_device_id(gpu_info, gpu_opt, my_gpu_index)];
+    nb->dev_info = &gpu_info->gpu_dev[get_gpu_device_id(gpu_info, gpu_opt, my_gpu_index)];
 
     /* local/non-local GPU streams */
     stat = cudaStreamCreate(&nb->stream[eintLocal]);
@@ -594,8 +622,8 @@ void nbnxn_gpu_init(FILE                 *fplog,
     /* init events for sychronization (timing disabled for performance reasons!) */
     stat = cudaEventCreateWithFlags(&nb->nonlocal_done, cudaEventDisableTiming);
     CU_RET_ERR(stat, "cudaEventCreate on nonlocal_done failed");
-    stat = cudaEventCreateWithFlags(&nb->misc_ops_done, cudaEventDisableTiming);
-    CU_RET_ERR(stat, "cudaEventCreate on misc_ops_one failed");
+    stat = cudaEventCreateWithFlags(&nb->misc_ops_and_local_H2D_done, cudaEventDisableTiming);
+    CU_RET_ERR(stat, "cudaEventCreate on misc_ops_and_local_H2D_done failed");
 
     /* On GPUs with ECC enabled, cudaStreamSynchronize shows a large overhead
      * (which increases with shorter time/step) caused by a known CUDA driver bug.
@@ -721,23 +749,14 @@ void nbnxn_gpu_init(FILE                 *fplog,
     /* pick L1 cache configuration */
     nbnxn_cuda_set_cacheconfig(nb->dev_info);
 
+    nbnxn_cuda_init_const(nb, ic, nbv_grp);
+
     *p_nb = nb;
 
     if (debug)
     {
         fprintf(debug, "Initialized CUDA data structures.\n");
     }
-}
-
-void nbnxn_gpu_init_const(gmx_nbnxn_cuda_t               *nb,
-                          const interaction_const_t      *ic,
-                          const nonbonded_verlet_group_t *nbv_group)
-{
-    init_atomdata_first(nb->atdat, nbv_group[0].nbat->ntype);
-    init_nbparam(nb->nbparam, ic, nbv_group[0].nbat, nb->dev_info);
-
-    /* clear energy and shift force outputs */
-    nbnxn_cuda_clear_e_fshift(nb);
 }
 
 void nbnxn_gpu_init_pairlist(gmx_nbnxn_cuda_t       *nb,
@@ -922,7 +941,7 @@ static void nbnxn_cuda_free_nbparam_table(cu_nbparam_t            *nbparam,
     {
 #ifdef HAVE_CUDA_TEXOBJ_SUPPORT
         /* Only device CC >= 3.0 (Kepler and later) support texture objects */
-        if (dev_info->prop.major >= 3)
+        if (use_texobj(dev_info))
         {
             stat = cudaDestroyTextureObject(nbparam->coulomb_tab_texobj);
             CU_RET_ERR(stat, "cudaDestroyTextureObject on coulomb_tab_texobj failed");
@@ -969,8 +988,8 @@ void nbnxn_gpu_free(gmx_nbnxn_cuda_t *nb)
 
     stat = cudaEventDestroy(nb->nonlocal_done);
     CU_RET_ERR(stat, "cudaEventDestroy failed on timers->nonlocal_done");
-    stat = cudaEventDestroy(nb->misc_ops_done);
-    CU_RET_ERR(stat, "cudaEventDestroy failed on timers->misc_ops_done");
+    stat = cudaEventDestroy(nb->misc_ops_and_local_H2D_done);
+    CU_RET_ERR(stat, "cudaEventDestroy failed on timers->misc_ops_and_local_H2D_done");
 
     if (nb->bDoTime)
     {
@@ -1009,7 +1028,7 @@ void nbnxn_gpu_free(gmx_nbnxn_cuda_t *nb)
 
 #ifdef HAVE_CUDA_TEXOBJ_SUPPORT
     /* Only device CC >= 3.0 (Kepler and later) support texture objects */
-    if (nb->dev_info->prop.major >= 3)
+    if (use_texobj(nb->dev_info))
     {
         stat = cudaDestroyTextureObject(nbparam->nbfp_texobj);
         CU_RET_ERR(stat, "cudaDestroyTextureObject on nbfp_texobj failed");
@@ -1026,7 +1045,7 @@ void nbnxn_gpu_free(gmx_nbnxn_cuda_t *nb)
     {
 #ifdef HAVE_CUDA_TEXOBJ_SUPPORT
         /* Only device CC >= 3.0 (Kepler and later) support texture objects */
-        if (nb->dev_info->prop.major >= 3)
+        if (use_texobj(nb->dev_info))
         {
             stat = cudaDestroyTextureObject(nbparam->nbfp_comb_texobj);
             CU_RET_ERR(stat, "cudaDestroyTextureObject on nbfp_comb_texobj failed");

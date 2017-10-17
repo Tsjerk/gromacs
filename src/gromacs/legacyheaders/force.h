@@ -3,7 +3,7 @@
  *
  * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
  * Copyright (c) 2001-2004, The GROMACS development team.
- * Copyright (c) 2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -39,6 +39,7 @@
 #define _force_h
 
 
+#include "gromacs/fileio/filenm.h"
 #include "gromacs/legacyheaders/genborn.h"
 #include "gromacs/legacyheaders/network.h"
 #include "gromacs/legacyheaders/tgroup.h"
@@ -104,7 +105,7 @@ t_forcetable make_tables(FILE *fp, const output_env_t oenv,
  * to .xvg files
  */
 
-bondedtable_t make_bonded_table(FILE *fplog, char *fn, int angle);
+bondedtable_t make_bonded_table(FILE *fplog, const char *fn, int angle);
 /* Return a table for bonded interactions,
  * angle should be: bonds 0, angles 1, dihedrals 2
  */
@@ -136,12 +137,20 @@ gmx_bool can_use_allvsall(const t_inputrec *ir,
  */
 
 
-gmx_bool nbnxn_acceleration_supported(FILE             *fplog,
-                                      const t_commrec  *cr,
-                                      const t_inputrec *ir,
-                                      gmx_bool          bGPU);
-/* Return if GPU/CPU-SIMD acceleration is supported with the given inputrec
- * with bGPU TRUE/FALSE.
+gmx_bool nbnxn_gpu_acceleration_supported(FILE             *fplog,
+                                          const t_commrec  *cr,
+                                          const t_inputrec *ir,
+                                          gmx_bool          bRerunMD);
+/* Return if GPU acceleration is supported with the given settings.
+ *
+ * If the return value is FALSE and fplog/cr != NULL, prints a fallback
+ * message to fplog/stderr.
+ */
+
+gmx_bool nbnxn_simd_supported(FILE             *fplog,
+                              const t_commrec  *cr,
+                              const t_inputrec *ir);
+/* Return if CPU SIMD support exists for the given inputrec
  * If the return value is FALSE and fplog/cr != NULL, prints a fallback
  * message to fplog/stderr.
  */
@@ -169,7 +178,7 @@ void init_forcerec(FILE              *fplog,
                    const char        *tabfn,
                    const char        *tabafn,
                    const char        *tabpfn,
-                   const char        *tabbfn,
+                   const t_filenm    *tabbfnm,
                    const char        *nbpu_opt,
                    gmx_bool           bNoSolvOpt,
                    real               print_force);
@@ -179,10 +188,6 @@ void init_forcerec(FILE              *fplog,
  * bMolEpot: Use the free energy stuff per molecule
  * print_force >= 0: print forces for atoms with force >= print_force
  */
-
-void forcerec_set_excl_load(t_forcerec           *fr,
-                            const gmx_localtop_t *top);
-/* Set the exclusion load for the local exclusions and possibly threads */
 
 void init_enerdata(int ngener, int n_lambda, gmx_enerdata_t *enerd);
 /* Intializes the energy storage struct */

@@ -48,12 +48,33 @@
 namespace gmx
 {
 
+FileInputRedirectorInterface::~FileInputRedirectorInterface()
+{
+}
+
 FileOutputRedirectorInterface::~FileOutputRedirectorInterface()
 {
 }
 
 namespace
 {
+
+/*! \internal
+ * \brief
+ * Implements the redirector returned by defaultFileInputRedirector().
+ *
+ * Does not redirect anything, but uses the file system as requested.
+ *
+ * \ingroup module_utility
+ */
+class DefaultInputRedirector : public FileInputRedirectorInterface
+{
+    public:
+        virtual bool fileExists(const char *filename) const
+        {
+            return File::exists(filename);
+        }
+};
 
 /*! \internal
  * \brief
@@ -80,6 +101,12 @@ class DefaultOutputRedirector : public FileOutputRedirectorInterface
 }   // namespace
 
 //! \cond libapi
+FileInputRedirectorInterface &defaultFileInputRedirector()
+{
+    static DefaultInputRedirector instance;
+    return instance;
+}
+
 FileOutputRedirectorInterface &defaultFileOutputRedirector()
 {
     static DefaultOutputRedirector instance;

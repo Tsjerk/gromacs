@@ -3,7 +3,7 @@
  *
  * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
  * Copyright (c) 2001-2004, The GROMACS development team.
- * Copyright (c) 2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -114,7 +114,8 @@ typedef struct gmx_update
 } t_gmx_update;
 
 
-static void do_update_md(int start, int nrend, double dt,
+static void do_update_md(int start, int nrend,
+                         double dt, int nstpcouple,
                          t_grp_tcstat *tcstat,
                          double nh_vxi[],
                          gmx_bool bNEMD, t_grp_acc *gstat, rvec accel[],
@@ -167,7 +168,7 @@ static void do_update_md(int start, int nrend, double dt,
                 if ((ptype[n] != eptVSite) && (ptype[n] != eptShell) && !nFreeze[gf][d])
                 {
                     vnrel = (lg*vrel[d] + dt*(imass*f[n][d] - 0.5*vxi*vrel[d]
-                                              - iprod(M[d], vrel)))/(1 + 0.5*vxi*dt);
+                                              - nstpcouple*iprod(M[d], vrel)))/(1 + 0.5*vxi*dt);
                     /* do not scale the mean velocities u */
                     vn             = gstat[ga].u[d] + accel[ga][d]*dt + vnrel;
                     v[n][d]        = vn;
@@ -351,7 +352,8 @@ static void do_update_vv_pos(int start, int nrend, double dt,
     }
 } /* do_update_vv_pos */
 
-static void do_update_visc(int start, int nrend, double dt,
+static void do_update_visc(int start, int nrend,
+                           double dt, int nstpcouple,
                            t_grp_tcstat *tcstat,
                            double nh_vxi[],
                            real invmass[],
@@ -399,7 +401,7 @@ static void do_update_visc(int start, int nrend, double dt,
                 if ((ptype[n] != eptVSite) && (ptype[n] != eptShell))
                 {
                     vn  = (lg*vrel[d] + dt*(imass*f[n][d] - 0.5*vxi*vrel[d]
-                                            - iprod(M[d], vrel)))/(1 + 0.5*vxi*dt);
+                                            - nstpcouple*iprod(M[d], vrel)))/(1 + 0.5*vxi*dt);
                     if (d == XX)
                     {
                         vn += vc + dt*cosz*cos_accel;
@@ -1728,6 +1730,42 @@ void update_constraints(FILE             *fplog,
          */
         wallcycle_start_nocount(wcycle, ewcUPDATE);
 
+        if (md->cFREEZE != NULL && constr != NULL)
+        {
+            /* If we have atoms that are frozen along some, but not all
+             * dimensions, the constraints will have moved them also along
+             * the frozen dimensions. To freeze such degrees of freedom
+             * we copy them back here to later copy them forward. It would
+             * be more elegant and slightly more efficient to copies zero
+             * times instead of twice, but the graph case below prevents this.
+             */
+            const ivec *nFreeze                     = inputrec->opts.nFreeze;
+            bool        partialFreezeAndConstraints = false;
+            for (int g = 0; g < inputrec->opts.ngfrz; g++)
+            {
+                int numFreezeDim = nFreeze[g][XX] + nFreeze[g][YY] + nFreeze[g][ZZ];
+                if (numFreezeDim > 0 && numFreezeDim < 3)
+                {
+                    partialFreezeAndConstraints = true;
+                }
+            }
+            if (partialFreezeAndConstraints)
+            {
+                for (int i = start; i < nrend; i++)
+                {
+                    int g = md->cFREEZE[i];
+
+                    for (int d = 0; d < DIM; d++)
+                    {
+                        if (nFreeze[g][d])
+                        {
+                            upd->xp[i][d] = state->x[i][d];
+                        }
+                    }
+                }
+            }
+        }
+
         if (graph && (graph->nnodes > 0))
         {
             unshift_x(graph, state->box, state->x, upd->xp);
@@ -1968,7 +2006,8 @@ void update_coords(FILE             *fplog,
             case (eiMD):
                 if (ekind->cosacc.cos_accel == 0)
                 {
-                    do_update_md(start_th, end_th, dt,
+                    do_update_md(start_th, end_th,
+                                 dt, inputrec->nstpcouple,
                                  ekind->tcstat, state->nosehoover_vxi,
                                  ekind->bNEMD, ekind->grpstat, inputrec->opts.acc,
                                  inputrec->opts.nFreeze,
@@ -1979,7 +2018,8 @@ void update_coords(FILE             *fplog,
                 }
                 else
                 {
-                    do_update_visc(start_th, end_th, dt,
+                    do_update_visc(start_th, end_th,
+                                   dt, inputrec->nstpcouple,
                                    ekind->tcstat, state->nosehoover_vxi,
                                    md->invmass, md->ptype,
                                    md->cTC, state->x, xprime, state->v, force, M,

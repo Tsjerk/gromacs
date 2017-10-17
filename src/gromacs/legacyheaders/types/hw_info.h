@@ -55,16 +55,13 @@ struct gmx_device_info_t;
  * incompatible driver/runtime. */
 typedef enum
 {
-    egpuCompatible = 0,  egpuNonexistent,  egpuIncompatible, egpuInsane
+    egpuCompatible = 0,  egpuNonexistent,  egpuIncompatible, egpuInsane, egpuNR
 } e_gpu_detect_res_t;
 
-/* Textual names of the GPU detection/check results (see e_gpu_detect_res_t). */
-static const char * const gpu_detect_res_str[] =
-{
-    "compatible", "inexistent", "incompatible", "insane"
-};
+/* Names of the GPU detection/check results */
+extern const char * const gpu_detect_res_str[egpuNR];
 
-/* GPU device information -- for now with only CUDA devices
+/* GPU device information -- includes either CUDA or OpenCL devices.
  * The gmx_hardware_detect module initializes it. */
 struct gmx_gpu_info_t
 {
@@ -118,7 +115,7 @@ enum {
     threadaffSEL, threadaffAUTO, threadaffON, threadaffOFF, threadaffNR
 };
 
-/* GPU device selection information -- for now with only CUDA devices */
+/* GPU device selection information -- includes either CUDA or OpenCL devices */
 typedef struct
 {
     char     *gpu_id;           /* GPU id's to use, each specified as chars */

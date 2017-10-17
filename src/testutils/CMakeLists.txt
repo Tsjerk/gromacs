@@ -33,8 +33,18 @@
 # the research papers on the package. Check out http://www.gromacs.org.
 
 include_directories(BEFORE SYSTEM ${GMOCK_INCLUDE_DIRS})
-include_directories(${LIBXML2_INCLUDE_DIR})
-file(GLOB TESTUTILS_SOURCES *.cpp)
+include_directories(SYSTEM ${LIBXML2_INCLUDE_DIR})
+set(TESTUTILS_SOURCES
+    cmdlinetest.cpp
+    integrationtests.cpp
+    mpi-printer.cpp
+    refdata.cpp
+    stringtest.cpp
+    testasserts.cpp
+    testfilemanager.cpp
+    testfileredirector.cpp
+    testinit.cpp
+    testoptions.cpp)
 
 add_library(testutils STATIC ${UNITTEST_TARGET_OPTIONS} ${TESTUTILS_SOURCES})
 set(TESTUTILS_LIBS testutils)

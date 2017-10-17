@@ -56,6 +56,9 @@
 /*! \brief Object to manage PME load balancing */
 struct pme_load_balancing_t;
 
+/*! \brief Return whether PME load balancing is active */
+bool pme_loadbal_is_active(const pme_load_balancing_t *pme_lb);
+
 /*! \brief Initialize the PP-PME load balacing data and infrastructure
  *
  * Initialize the PP-PME load balacing data and infrastructure.
@@ -65,12 +68,13 @@ struct pme_load_balancing_t;
  * usage.
  */
 void pme_loadbal_init(pme_load_balancing_t     **pme_lb_p,
+                      t_commrec                 *cr,
+                      FILE                      *fp_log,
                       const t_inputrec          *ir,
                       matrix                     box,
                       const interaction_const_t *ic,
                       struct gmx_pme_t          *pmedata,
                       gmx_bool                   bUseGPU,
-                      gmx_bool                   bSepPMERanks,
                       gmx_bool                  *bPrinting);
 
 /*! \brief Process cycles and PME load balance when necessary
@@ -92,12 +96,10 @@ void pme_loadbal_do(pme_load_balancing_t *pme_lb,
                     gmx_int64_t           step_rel,
                     gmx_bool             *bPrinting);
 
-/*! \brief Restart the PME load balancing discarding all timings gathered up till now */
-void restart_pme_loadbal(pme_load_balancing_t *pme_lb, int n);
-
 /*! \brief Finish the PME load balancing and print the settings when fplog!=NULL */
 void pme_loadbal_done(pme_load_balancing_t *pme_lb,
-                      t_commrec *cr, FILE *fplog,
-                      gmx_bool bNonBondedOnGPU);
+                      t_commrec            *cr,
+                      FILE                 *fplog,
+                      gmx_bool              bNonBondedOnGPU);
 
 #endif

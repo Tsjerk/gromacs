@@ -18,10 +18,10 @@ subsets of the molecular system (see :ref:`gmx convert-tpr` and
 :ref:`gmx trjconv`). It is easier to do a correct "single-point" energy
 evaluation with this feature than a 0-step simulation.
 
-Neighbour searching is normally performed for every frame in the
+Neighbor searching is normally performed for every frame in the
 trajectory, since :ref:`gmx mdrun` can no longer assume anything about how the
 structures were generated. If :mdp:`nstlist` is zero, then only one
-neighbour list will be constructed. Naturally, no update or constraint
+neighbor list will be constructed. Naturally, no update or constraint
 algorithms are ever used.
 
 Running a simulation in reproducible mode
@@ -62,20 +62,20 @@ including ``-deffnm``.
    You must create a set of ``n`` directories for the ``n`` simulations,
    place all the relevant input files in those directories (e.g. named
    ``topol.tpr``), and run with
-   ``mpirun -np x mdrun_mpi -s topol -multidir <names-of-directories>``.
+   ``mpirun -np x gmx mdrun_mpi -s topol -multidir <names-of-directories>``.
    If the order of the simulations
    within the multi-simulation is significant, then you are responsible
    for ordering their names when you provide them to ``-multidir``. Be
    careful with shells that do filename globbing dictionary-style, e.g.
    ``dir1 dir10 dir11 ... dir2 ...``. This option is generally the
-   most convenient to use. ``mdrun -table`` for the group cutoff-scheme
+   most convenient to use. ``gmx mdrun -table`` for the group cutoff-scheme
    works only in this mode.
 
 ``-multi``
    You must organize that the filenames for each simulation in a set of
    ``n`` simulations have an integer ``0`` through ``n-1`` appended to
    the filename (e.g. ``topol2.tpr``), and run with
-   ``mpirun -np x mdrun -multi n -s input``. The order of simulations
+   ``mpirun -np x gmx mdrun -multi n -s input``. The order of simulations
    within the set is determined by the integer appended.
 
 Examples running multi-simulations
@@ -83,7 +83,7 @@ Examples running multi-simulations
 
 ::
 
-    mpirun -np 32 mdrun_mpi -multi
+    mpirun -np 32 gmx mdrun_mpi -multi
 
 Starts a multi-simulation on 32 ranks with as many simulations ``n`` as
 there are files named ``topol*.tpr`` for integers ``0`` to ``n-1``. Other
@@ -91,14 +91,14 @@ input and output files are suffixed similarly.
 
 ::
 
-    mpirun -np 32 mdrun_mpi -multidir a b c d
+    mpirun -np 32 gmx mdrun_mpi -multidir a b c d
 
 Starts a multi-simulation on 32 ranks with 4 simulations. The input
 and output files are found in directories ``a``, ``b``, ``c``, and ``d``.
 
 ::
 
-    mpirun -np 32 mdrun_mpi -multidir a b c d -gpu_id 0000000011111111
+    mpirun -np 32 gmx mdrun_mpi -multidir a b c d -gpu_id 0000000011111111
 
 Starts the same multi-simulation as before. On a machine with two
 physical nodes and two GPUs per node, there will be 16 MPI ranks per
@@ -111,7 +111,7 @@ GPU. However, the order ``0101010101010101`` could run faster.
 Running replica-exchange simulations
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-When running a multi-simulation, using ``mdrun -replex n`` means that a
+When running a multi-simulation, using ``gmx mdrun -replex n`` means that a
 replica exchange is attempted every given number of steps. The number
 of replicas is set with the ``-multi`` or ``-multidir`` option, described
 above.  All run input files should use a different value for the
@@ -126,11 +126,12 @@ Controlling the length of the simulation
 
 Normally, the length of an MD simulation is best managed through the
 [.mdp] option [nsteps](#nsteps), however there are situations where
-more control is useful. `mdrun -nsteps 100` overrides the [.mdp] file
-and executes 100 steps. `mdrun -maxh 2.5` will terminate the
+more control is useful. `gmx mdrun -nsteps 100` overrides the [.mdp] file
+and executes 100 steps. `gmx mdrun -maxh 2.5` will terminate the
 simulation shortly before 2.5 hours elapse, which can be useful when
-running under cluster queues (as long as the queueing system does not
-ever suspend the simulation).
+running under cluster queues (as long as the queuing system does not
+ever suspend the simulation). `-maxh` is not supported with
+multi-simulations.
 
 Running a membrane protein embedding simulation
 -----------------------------------------------
@@ -143,7 +144,7 @@ long time in a previous simulation. In theory that could be accomplished
 with a procedure similar to genbox, but since lipids are much larger
 than water molecules it will lead to a large vacuum layer between the
 protein and membrane if we remove all molecules where any atom is
-overlapping. Instead, this module works by first artifically shrinking
+overlapping. Instead, this module works by first artificially shrinking
 the protein in the xy-plane, then it removes lipids that overlap with
 a much smaller core, after which we gradually push the protein atoms
 back to their initial positions, while using normal dynamics for the
@@ -152,7 +153,7 @@ rest of the system so lipids adapt to the protein.
 To use membrane embedding, start by building a lipid bilayer that is
 just-so-slightly larger in the xy-plane than what you expect to need
 in the end, and make sure you have enough water outside the membrane
-to accomodate globular domains. Place the protein in the same coordinate
+to accommodate globular domains. Place the protein in the same coordinate
 file (and topology) as your lipid bilayer, and make sure it is in the
 orientation and position you want right in the middle of the bilayer.
 
