@@ -3,7 +3,7 @@
  *
  * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
  * Copyright (c) 2001-2004, The GROMACS development team.
- * Copyright (c) 2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -337,6 +337,29 @@ void cmp_iparm_AB(FILE *fp, const char *s, t_functype ft, t_iparams ip1, real ft
     }
 }
 
+static void cmp_cmap(FILE *fp, const gmx_cmap_t *cmap1, const gmx_cmap_t *cmap2, real ftol, real abstol)
+{
+    cmp_int(fp, "cmap ngrid", -1, cmap1->ngrid, cmap2->ngrid);
+    cmp_int(fp, "cmap grid_spacing", -1, cmap1->grid_spacing, cmap2->grid_spacing);
+    if (cmap1->ngrid == cmap2->ngrid &&
+        cmap1->grid_spacing == cmap2->grid_spacing)
+    {
+        int g;
+
+        for (g = 0; g < cmap1->ngrid; g++)
+        {
+            int i;
+
+            fprintf(fp, "comparing cmap %d\n", g);
+
+            for (i = 0; i < 4*cmap1->grid_spacing*cmap1->grid_spacing; i++)
+            {
+                cmp_real(fp, "", i, cmap1->cmapdata[g].cmap[i], cmap2->cmapdata[g].cmap[i], ftol, abstol);
+            }
+        }
+    }
+}
+
 static void cmp_idef(FILE *fp, t_idef *id1, t_idef *id2, real ftol, real abstol)
 {
     int  i;
@@ -356,6 +379,7 @@ static void cmp_idef(FILE *fp, t_idef *id1, t_idef *id2, real ftol, real abstol)
                       id1->iparams[i], id2->iparams[i], ftol, abstol);
         }
         cmp_real(fp, "fudgeQQ", -1, id1->fudgeQQ, id2->fudgeQQ, ftol, abstol);
+        cmp_cmap(fp, &id1->cmap_grid, &id2->cmap_grid, ftol, abstol);
         for (i = 0; (i < F_NRE); i++)
         {
             cmp_ilist(fp, i, &(id1->il[i]), &(id2->il[i]));
@@ -498,6 +522,39 @@ static void cmp_groups(FILE *fp, gmx_groups_t *g0, gmx_groups_t *g1,
      */
 }
 
+static void cmp_rvecs_rmstol(FILE *fp, const char *title, int n, rvec x1[], rvec x2[],
+                             real ftol, real abstol)
+{
+    int    i, m;
+    double rms;
+
+    /* For a vector you are usally not interested in a relative difference
+     * on a component that is very small compared to the other components.
+     * Therefore we do the relative comparision relative to the RMS component.
+     */
+    rms = 0.0;
+    for (i = 0; (i < n); i++)
+    {
+        for (m = 0; m < DIM; m++)
+        {
+            rms += x1[i][m]*x1[i][m] + x2[i][m]*x2[i][m];
+        }
+    }
+    rms = sqrt(rms/(2*n*DIM));
+
+    /* Convert the relative tolerance into an absolute tolerance */
+    if (ftol*rms < abstol)
+    {
+        abstol = ftol*rms;
+    }
+
+    /* And now do the actual comparision */
+    for (i = 0; (i < n); i++)
+    {
+        cmp_rvec(fp, title, i, x1[i], x2[i], 0.0, abstol);
+    }
+}
+
 static void cmp_rvecs(FILE *fp, const char *title, int n, rvec x1[], rvec x2[],
                       gmx_bool bRMSD, real ftol, real abstol)
 {
@@ -519,54 +576,7 @@ static void cmp_rvecs(FILE *fp, const char *title, int n, rvec x1[], rvec x2[],
     }
     else
     {
-        for (i = 0; (i < n); i++)
-        {
-            cmp_rvec(fp, title, i, x1[i], x2[i], ftol, abstol);
-        }
-    }
-}
-
-
-/* Similar to cmp_rvecs, but this routine scales the allowed absolute tolerance
- * by the RMS of the force components of x1.
- */
-static void cmp_rvecs_rmstol(FILE *fp, const char *title, int n, rvec x1[], rvec x2[],
-                             real ftol, real abstol)
-{
-    int    i, m;
-    double d;
-    double ave_x1, rms_x1;
-
-    /* It is tricky to compare real values, in particular forces that
-     * are sums of lots of terms where the final value might be close to 0.0.
-     * To get a reference magnitude we calculate the RMS value of each
-     * component in x1, and then set the allowed absolute tolerance to the
-     * relative tolerance times this RMS magnitude.
-     */
-    ave_x1 = 0.0;
-    for (i = 0; i < n; i++)
-    {
-        for (m = 0; m < DIM; m++)
-        {
-            ave_x1 += x1[i][m];
-        }
-    }
-    ave_x1 /= n*DIM;
-
-    rms_x1 = 0.0;
-    for (i = 0; (i < n); i++)
-    {
-        for (m = 0; m < DIM; m++)
-        {
-            d       = x1[i][m] - ave_x1;
-            rms_x1 += d*d;
-        }
-    }
-    rms_x1 = sqrt(rms_x1/(DIM*n));
-    /* And now do the actual comparision with a hopefully realistic abstol. */
-    for (i = 0; (i < n); i++)
-    {
-        cmp_rvec(fp, title, i, x1[i], x2[i], ftol, abstol*rms_x1);
+        cmp_rvecs_rmstol(fp, title, n, x1, x2, ftol, abstol);
     }
 }
 
@@ -916,17 +926,17 @@ static void comp_state(t_state *st1, t_state *st2,
     if (st1->flags & (1<<estSVIR_PREV))
     {
         fprintf(stdout, "comparing shake vir_prev\n");
-        cmp_rvecs_rmstol(stdout, "svir_prev", DIM, st1->svir_prev, st2->svir_prev, ftol, abstol);
+        cmp_rvecs(stdout, "svir_prev", DIM, st1->svir_prev, st2->svir_prev, FALSE, ftol, abstol);
     }
     if (st1->flags & (1<<estFVIR_PREV))
     {
         fprintf(stdout, "comparing force vir_prev\n");
-        cmp_rvecs_rmstol(stdout, "fvir_prev", DIM, st1->fvir_prev, st2->fvir_prev, ftol, abstol);
+        cmp_rvecs(stdout, "fvir_prev", DIM, st1->fvir_prev, st2->fvir_prev, FALSE, ftol, abstol);
     }
     if (st1->flags & (1<<estPRES_PREV))
     {
         fprintf(stdout, "comparing prev_pres\n");
-        cmp_rvecs_rmstol(stdout, "pres_prev", DIM, st1->pres_prev, st2->pres_prev, ftol, abstol);
+        cmp_rvecs(stdout, "pres_prev", DIM, st1->pres_prev, st2->pres_prev, FALSE, ftol, abstol);
     }
     cmp_int(stdout, "ngtc", -1, st1->ngtc, st2->ngtc);
     cmp_int(stdout, "nhchainlength", -1, st1->nhchainlength, st2->nhchainlength);
@@ -1068,14 +1078,7 @@ void comp_frame(FILE *fp, t_trxframe *fr1, t_trxframe *fr2,
     }
     if (cmp_bool(fp, "bF", -1, fr1->bF, fr2->bF))
     {
-        if (bRMSD)
-        {
-            cmp_rvecs(fp, "f", min(fr1->natoms, fr2->natoms), fr1->f, fr2->f, bRMSD, ftol, abstol);
-        }
-        else
-        {
-            cmp_rvecs_rmstol(fp, "f", min(fr1->natoms, fr2->natoms), fr1->f, fr2->f, ftol, abstol);
-        }
+        cmp_rvecs(fp, "f", min(fr1->natoms, fr2->natoms), fr1->f, fr2->f, bRMSD, ftol, abstol);
     }
     if (cmp_bool(fp, "bBox", -1, fr1->bBox, fr2->bBox))
     {

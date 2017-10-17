@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2009,2010,2011,2012,2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2009,2010,2011,2012,2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -267,7 +267,7 @@ static int parse_logfile(const char *logfile, const char *errfile,
                     }
                     iFound = eFoundDDStr;
                 }
-                /* Catch a few errors that might have occured: */
+                /* Catch a few errors that might have occurred: */
                 else if (str_starts(line, "There is no domain decomposition for"))
                 {
                     fclose(fp);
@@ -356,7 +356,7 @@ static int parse_logfile(const char *logfile, const char *errfile,
             {
                 if (fgets(line, STRLEN, fp) != NULL)
                 {
-                    fprintf(stderr, "\nWARNING: An error occured during this benchmark:\n"
+                    fprintf(stderr, "\nWARNING: An error occurred during this benchmark:\n"
                             "%s\n", line);
                 }
                 fclose(fp);
@@ -596,7 +596,6 @@ static void get_program_paths(gmx_bool bThreads, char *cmd_mpirun[], char *cmd_m
     char      *cp;
     FILE      *fp;
     const char def_mpirun[]   = "mpirun";
-    const char def_mdrun[]    = "mdrun";
 
     const char empty_mpirun[] = "";
 
@@ -617,13 +616,19 @@ static void get_program_paths(gmx_bool bThreads, char *cmd_mpirun[], char *cmd_m
         *cmd_mpirun = gmx_strdup(empty_mpirun);
     }
 
-    if ( (cp = getenv("MDRUN" )) != NULL)
+    if (*cmd_mdrun == NULL)
     {
-        *cmd_mdrun  = gmx_strdup(cp);
-    }
-    else
-    {
-        *cmd_mdrun  = gmx_strdup(def_mdrun);
+        /* The use of MDRUN is deprecated, but made available in 5.1
+           for backward compatibility. It may be removed in a future
+           version. */
+        if ( (cp = getenv("MDRUN" )) != NULL)
+        {
+            *cmd_mdrun = gmx_strdup(cp);
+        }
+        else
+        {
+            gmx_fatal(FARGS, "The way to call mdrun must be set in the -mdrun command-line flag.");
+        }
     }
 }
 
@@ -1422,6 +1427,8 @@ static void make_sure_it_runs(char *mdrun_cmd_line, int length, FILE *fp,
     remove_if_exists(opt2fn("-be", nfile, fnm));
     remove_if_exists(opt2fn("-bcpo", nfile, fnm));
     remove_if_exists(opt2fn("-bg", nfile, fnm));
+    remove_if_exists(opt2fn("-bo", nfile, fnm));
+    remove_if_exists(opt2fn("-bx", nfile, fnm));
 
     sfree(command);
     sfree(msg    );
@@ -1477,7 +1484,7 @@ static void do_the_tests(
         "Number of PP ranks has a prime factor that is too large.",
         "The number of PP ranks did not suit the number of GPUs.",
         "Some GPUs were not detected or are incompatible.",
-        "An error occured."
+        "An error occurred."
     };
     char        str_PME_f_load[13];
 
@@ -1948,7 +1955,8 @@ static void create_command_line_snippets(
         t_filenm  fnm[],
         char     *cmd_args_bench[],  /* command line arguments for benchmark runs */
         char     *cmd_args_launch[], /* command line arguments for simulation run */
-        char      extra_args[])      /* Add this to the end of the command line */
+        char      extra_args[],      /* Add this to the end of the command line */
+        char     *deffnm)            /* Default file names, or NULL if not set */
 {
     int         i;
     char       *opt;
@@ -1973,6 +1981,11 @@ static void create_command_line_snippets(
         add_to_string(cmd_args_bench, strbuf);
     }
     /* These switches take effect only at launch time */
+    if (deffnm)
+    {
+        sprintf(strbuf, "-deffnm %s ", deffnm);
+        add_to_string(cmd_args_launch, strbuf);
+    }
     if (FALSE == bAppendFiles)
     {
         add_to_string(cmd_args_launch, "-noappend ");
@@ -2133,14 +2146,20 @@ int gmx_tune_pme(int argc, char *argv[])
         "part of the Ewald sum. ",
         "Simply pass your [REF].tpr[ref] file to [THISMODULE] together with other options",
         "for [gmx-mdrun] as needed.[PAR]",
-        "Which executables are used can be set in the environment variables",
-        "MPIRUN and MDRUN. If these are not present, 'mpirun' and 'mdrun'",
-        "will be used as defaults. Note that for certain MPI frameworks you",
-        "need to provide a machine- or hostfile. This can also be passed",
+        "[THISMODULE] needs to call [gmx-mdrun] and so requires that you",
+        "specify how to call mdrun with the argument to the [TT]-mdrun[tt]",
+        "parameter. Depending how you have built GROMACS, values such as",
+        "'gmx mdrun', 'gmx_d mdrun', or 'mdrun_mpi' might be needed.[PAR]",
+        "The program that runs MPI programs can be set in the environment variable",
+        "MPIRUN (defaults to 'mpirun'). Note that for certain MPI frameworks,",
+        "you need to provide a machine- or hostfile. This can also be passed",
         "via the MPIRUN variable, e.g.[PAR]",
-        "[TT]export MPIRUN=\"/usr/local/mpirun -machinefile hosts\"[tt][PAR]",
+        "[TT]export MPIRUN=\"/usr/local/mpirun -machinefile hosts\"[tt]",
+        "Note that in such cases it is normally necessary to compile",
+        "and/or run [THISMODULE] without MPI support, so that it can call",
+        "the MPIRUN program.[PAR]",
         "Before doing the actual benchmark runs, [THISMODULE] will do a quick",
-        "check whether mdrun works as expected with the provided parallel settings",
+        "check whether [gmx-mdrun] works as expected with the provided parallel settings",
         "if the [TT]-check[tt] option is activated (the default).",
         "Please call [THISMODULE] with the normal options you would pass to",
         "[gmx-mdrun] and add [TT]-np[tt] for the number of ranks to perform the",
@@ -2203,6 +2222,7 @@ int gmx_tune_pme(int argc, char *argv[])
     char           *ExtraArgs      = NULL;
     char          **tpr_names      = NULL;
     const char     *simulation_tpr = NULL;
+    char           *deffnm         = NULL;
     int             best_npme, best_tpr;
     int             sim_part = 1; /* For benchmarks with checkpoint files */
     char            bbuf[STRLEN];
@@ -2292,7 +2312,7 @@ int gmx_tune_pme(int argc, char *argv[])
     int             nthreads = 1;
 
     const char     *procstring[] =
-    { NULL, "-np", "-n", "none", NULL };
+    { NULL, "np", "n", "none", NULL };
     const char     *npmevalues_opt[] =
     { NULL, "auto", "all", "subset", NULL };
 
@@ -2308,10 +2328,12 @@ int gmx_tune_pme(int argc, char *argv[])
         /***********************/
         /* g_tune_pme options: */
         /***********************/
+        { "-mdrun",    FALSE, etSTR,  {&cmd_mdrun},
+          "Command line to run a simulation, e.g. 'gmx mdrun' or 'mdrun_mpi'" },
         { "-np",       FALSE, etINT,  {&nnodes},
           "Number of ranks to run the tests on (must be > 2 for separate PME ranks)" },
         { "-npstring", FALSE, etENUM, {procstring},
-          "Specify the number of ranks to [TT]$MPIRUN[tt] using this string"},
+          "Name of the [TT]$MPIRUN[tt] option that specifies the number of ranks to use ('np', or 'n'; use 'none' if there is no such option)" },
         { "-ntmpi",    FALSE, etINT,  {&nthreads},
           "Number of MPI-threads to run the tests on (turns MPI & mpirun off)"},
         { "-r",        FALSE, etINT,  {&repeats},
@@ -2357,6 +2379,8 @@ int gmx_tune_pme(int argc, char *argv[])
           "Append to previous output files when continuing from checkpoint instead of adding the simulation part number to all file names (for launch only)" },
         { "-cpnum",    FALSE, etBOOL, {&bKeepAndNumCPT},
           "Keep and number checkpoint files (launch only)" },
+        { "-deffnm",   FALSE, etSTR,  {&deffnm},
+          "Set the default filenames (launch only)" },
         { "-resethway", FALSE, etBOOL, {&bResetCountersHalfWay},
           "HIDDENReset the cycle counters after half the number of steps or halfway [TT]-maxh[tt] (launch only)" }
     };
@@ -2415,7 +2439,7 @@ int gmx_tune_pme(int argc, char *argv[])
          * mpirun command. */
         if (strcmp(procstring[0], "none") != 0)
         {
-            sprintf(bbuf, " %s %d ", procstring[0], nnodes);
+            sprintf(bbuf, " -%s %d ", procstring[0], nnodes);
         }
         else
         {
@@ -2426,7 +2450,7 @@ int gmx_tune_pme(int argc, char *argv[])
     cmd_np = bbuf;
 
     create_command_line_snippets(bAppendFiles, bKeepAndNumCPT, bResetCountersHalfWay, presteps,
-                                 NFILE, fnm, &cmd_args_bench, &cmd_args_launch, ExtraArgs);
+                                 NFILE, fnm, &cmd_args_bench, &cmd_args_launch, ExtraArgs, deffnm);
 
     /* Prepare to use checkpoint file if requested */
     sim_part = 1;
@@ -2516,7 +2540,7 @@ int gmx_tune_pme(int argc, char *argv[])
         fprintf(fp, "The mpirun command is   : %s\n", cmd_mpirun);
         if (strcmp(procstring[0], "none") != 0)
         {
-            fprintf(fp, "Passing # of ranks via  : %s\n", procstring[0]);
+            fprintf(fp, "Passing # of ranks via  : -%s\n", procstring[0]);
         }
         else
         {

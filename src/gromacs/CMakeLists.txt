@@ -71,7 +71,7 @@ if(GMX_USE_TNG)
                 "TNG >= 1.6.0 not found. "
                 "You can set GMX_EXTERNAL_TNG=OFF to compile TNG.")
         endif()
-        include_directories(${TNG_IO_INCLUDE_DIRS})
+        include_directories(SYSTEM ${TNG_IO_INCLUDE_DIRS})
     endif()
     if(NOT GMX_EXTERNAL_TNG)
         include(${CMAKE_SOURCE_DIR}/src/external/tng_io/BuildTNG.cmake)
@@ -81,7 +81,7 @@ if(GMX_USE_TNG)
 
         if (HAVE_ZLIB)
             list(APPEND GMX_EXTRA_LIBRARIES ${ZLIB_LIBRARIES})
-            include_directories(${ZLIB_INCLUDE_DIRS})
+            include_directories(SYSTEM ${ZLIB_INCLUDE_DIRS})
         endif()
     endif()
 else()
@@ -166,7 +166,7 @@ if(GMX_USE_GCC44_BUG_WORKAROUND)
    gmx_apply_gcc44_bug_workaround("mdlib/constr.c")
 endif()
 
-if (GMX_GPU)
+if (GMX_GPU AND NOT GMX_USE_OPENCL)
     cuda_add_library(libgromacs ${LIBGROMACS_SOURCES}
             OPTIONS
             RELWITHDEBINFO -g
@@ -203,7 +203,7 @@ target_link_libraries(libgromacs
                       ${TNG_IO_LIBRARIES}
                       ${FFT_LIBRARIES} ${LINEAR_ALGEBRA_LIBRARIES}
                       ${XML_LIBRARIES}
-                      ${THREAD_LIB} ${GMX_SHARED_LINKER_FLAGS})
+                      ${THREAD_LIB} ${GMX_SHARED_LINKER_FLAGS} ${OPENCL_LIBRARIES})
 set_target_properties(libgromacs PROPERTIES
                       OUTPUT_NAME "gromacs${GMX_LIBS_SUFFIX}"
                       SOVERSION ${LIBRARY_SOVERSION_MAJOR}
@@ -228,7 +228,7 @@ if (NOT GMX_BUILD_MDRUN_ONLY)
 endif()
 
 if (INSTALL_CUDART_LIB) #can be set manual by user
-    if (GMX_GPU)
+    if (GMX_GPU AND NOT GMX_USE_OPENCL)
         foreach(CUDA_LIB ${CUDA_LIBRARIES})
             string(REGEX MATCH "cudart" IS_CUDART ${CUDA_LIB})
             if(IS_CUDART) #libcuda should not be installed
@@ -241,4 +241,11 @@ if (INSTALL_CUDART_LIB) #can be set manual by user
     else()
         message(WARNING "INSTALL_CUDART_LIB only makes sense with GMX_GPU")
     endif()
+endif()
+
+if(GMX_GPU AND GMX_USE_OPENCL)
+    set(OPENCL_KERNELS ${MDLIB_OPENCL_KERNELS})
+
+    install(FILES ${OPENCL_KERNELS} DESTINATION
+        ${OCL_INSTALL_DIR} COMPONENT libraries)
 endif()

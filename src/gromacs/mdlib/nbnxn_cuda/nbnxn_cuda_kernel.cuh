@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2012,2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2012,2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -58,6 +58,9 @@
 /* On Kepler pre-loading i-atom types to shmem gives a few %,
    but on Fermi it does not */
 #define IATYPE_SHMEM
+#ifdef HAVE_CUDA_TEXOBJ_SUPPORT
+#define USE_TEXOBJ
+#endif
 #endif
 
 #if defined EL_EWALD_ANA || defined EL_EWALD_TAB
@@ -89,6 +92,37 @@
 
     Each thread calculates an i force-component taking one pair of i-j atoms.
  */
+
+/* NTHREAD_Z controls the number of j-clusters processed concurrently on NTHREAD_Z
+ * warp-pairs per block.
+ *
+ * - On CC 2.0-3.5, 5.0, and 5.2, NTHREAD_Z == 1, translating to 64 th/block with 16
+ * blocks/multiproc, is the fastest even though this setup gives low occupancy.
+ * NTHREAD_Z > 1 results in excessive register spilling unless the minimum blocks
+ * per multiprocessor is reduced proportionally to get the original number of max
+ * threads in flight (and slightly lower performance).
+ * - On CC 3.7 and 6.0 there are enough registers to double the number of threads; using
+ * NTHREADS_Z == 2 is fastest with 16 blocks (TODO: test with RF and other kernels
+ * with low-register use).
+ *
+ * Note that the current kernel implementation only supports NTHREAD_Z > 1 with
+ * shuffle-based reduction, hence CC >= 3.0.
+ */
+
+/* Kernel launch bounds as function of NTHREAD_Z.
+ * - CC 3.0/3.5/5.x, >=6.1: NTHREAD_Z=1, (64, 16) bounds
+ * - CC 3.7, 6.0:           NTHREAD_Z=2, (128, 16) bounds
+ *
+ * Note: convenience macros, need to be undef-ed at the end of the file.
+ */
+#if __CUDA_ARCH__ == 370 || __CUDA_ARCH__ == 600
+#define NTHREAD_Z           (2)
+#define MIN_BLOCKS_PER_MP   (16)
+#else
+#define NTHREAD_Z           (1)
+#define MIN_BLOCKS_PER_MP   (16)
+#endif
+#define THREADS_PER_BLOCK   (CL_SIZE*CL_SIZE*NTHREAD_Z)
 
 #if __CUDA_ARCH__ >= 350
 __launch_bounds__(THREADS_PER_BLOCK, MIN_BLOCKS_PER_MP)
@@ -317,7 +351,10 @@ __global__ void NB_KERNEL_FUNC_NAME(nbnxn_kernel, _F_cuda)
 #endif
             for (jm = 0; jm < NBNXN_GPU_JGROUP_SIZE; jm++)
             {
-                if (imask & (supercl_interaction_mask << (jm * NCL_PER_SUPERCL)))
+                /* ((1U << NCL_PER_SUPERCL) - 1U) is the i-cluster interaction
+                 * mask for a super-cluster with all NCL_PER_SUPERCL bits set.
+                 */
+                if (imask & (((1U << NCL_PER_SUPERCL) - 1U) << (jm * NCL_PER_SUPERCL)))
                 {
                     mask_ji = (1U << (jm * NCL_PER_SUPERCL));
 
@@ -436,6 +473,14 @@ __global__ void NB_KERNEL_FUNC_NAME(nbnxn_kernel, _F_cuda)
 #endif /* LJ_EWALD_COMB_GEOM */
 #endif /* LJ_EWALD */
 
+#ifdef LJ_POT_SWITCH
+#ifdef CALC_ENERGIES
+                                calculate_potential_switch_F_E(nbparam, c6, c12, inv_r, r2, &F_invr, &E_lj_p);
+#else
+                                calculate_potential_switch_F(nbparam, c6, c12, inv_r, r2, &F_invr, &E_lj_p);
+#endif /* CALC_ENERGIES */
+#endif /* LJ_POT_SWITCH */
+
 #ifdef VDW_CUTOFF_CHECK
                                 /* Separate VDW cut-off check to enable twin-range cut-offs
                                  * (rvdw < rcoulomb <= rlist)
@@ -446,14 +491,6 @@ __global__ void NB_KERNEL_FUNC_NAME(nbnxn_kernel, _F_cuda)
                                 E_lj_p       *= vdw_in_range;
 #endif
 #endif                          /* VDW_CUTOFF_CHECK */
-
-#ifdef LJ_POT_SWITCH
-#ifdef CALC_ENERGIES
-                                calculate_potential_switch_F_E(nbparam, c6, c12, inv_r, r2, &F_invr, &E_lj_p);
-#else
-                                calculate_potential_switch_F(nbparam, c6, c12, inv_r, r2, &F_invr, &E_lj_p);
-#endif /* CALC_ENERGIES */
-#endif /* LJ_POT_SWITCH */
 
 #ifdef CALC_ENERGIES
                                 E_lj    += E_lj_p;
@@ -579,6 +616,11 @@ __global__ void NB_KERNEL_FUNC_NAME(nbnxn_kernel, _F_cuda)
 
 #undef REDUCE_SHUFFLE
 #undef IATYPE_SHMEM
+#undef USE_TEXOBJ
+
+#undef NTHREAD_Z
+#undef MIN_BLOCKS_PER_MP
+#undef THREADS_PER_BLOCK
 
 #undef EL_EWALD_ANY
 #undef EXCLUSION_FORCES

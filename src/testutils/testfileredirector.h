@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2015, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -32,25 +32,62 @@
  * To help us fund GROMACS development, we humbly ask that you cite
  * the research papers on the package. Check out http://www.gromacs.org.
  */
-/*! \file
- *  \brief Define CUDA implementation of nbnxn_gpu_git_support.h
+/*! \libinternal \file
+ * \brief
+ * Declares generic mock implementations for interfaces in fileredirector.h.
  *
- *  \author Mark Abraham <mark.j.abraham@gmail.com>
+ * \author Teemu Murtola <teemu.murtola@gmail.com>
+ * \inlibraryapi
+ * \ingroup module_testutils
  */
-#include "gmxpre.h"
+#ifndef GMX_TESTUTILS_TESTFILEREDIRECTOR_H
+#define GMX_TESTUTILS_TESTFILEREDIRECTOR_H
 
-#include "gromacs/legacyheaders/types/interaction_const.h"
-#include "gromacs/mdlib/nbnxn_gpu_jit_support.h"
+#include <set>
+#include <string>
 
-void
-nbnxn_gpu_compile_kernels(int                        /*mygpu*/,
-                          int                        /*rank*/,
-                          const gmx_gpu_info_t      */*gpu_info*/,
-                          const gmx_gpu_opt_t       */*gpu_opt*/,
-                          const interaction_const_t */*ic*/)
+#include "gromacs/utility/classhelpers.h"
+#include "gromacs/utility/fileredirector.h"
+
+namespace gmx
 {
-    /* CUDA support does not use JIT (yet).
-     *
-     * It would be nice if this function inlined away to nothing, but
-     * it's only used during setup. */
-}
+namespace test
+{
+
+/*! \libinternal \brief
+ * In-memory implementation for FileInputRedirectorInterface for tests.
+ *
+ * By default, this implementation will return `false` for all file existence
+ * checks.  To return `true` for a specific path, use addExistingFile().
+ *
+ * \inlibraryapi
+ * \ingroup module_testutils
+ */
+class TestFileInputRedirector : public FileInputRedirectorInterface
+{
+    public:
+        TestFileInputRedirector();
+        virtual ~TestFileInputRedirector();
+
+        /*! \brief
+         * Marks the provided path as an existing file.
+         *
+         * \throws std::bad_alloc if out of memory.
+         *
+         * Further checks for existence of the given path will return `true`.
+         */
+        void addExistingFile(const char *filename);
+
+        // From FileInputRedirectorInterface
+        virtual bool fileExists(const char *filename) const;
+
+    private:
+        std::set<std::string> existingFiles_;
+
+        GMX_DISALLOW_COPY_AND_ASSIGN(TestFileInputRedirector);
+};
+
+} // namespace test
+} // namespace gmx
+
+#endif

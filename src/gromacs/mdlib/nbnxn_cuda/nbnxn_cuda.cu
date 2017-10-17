@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2012,2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2012,2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -69,10 +69,6 @@
 
 #include "nbnxn_cuda_types.h"
 
-#if defined HAVE_CUDA_TEXOBJ_SUPPORT && __CUDA_ARCH__ >= 300
-#define USE_TEXOBJ
-#endif
-
 /*! Texture reference for LJ C6/C12 parameters; bound to cu_nbparam_t.nbfp */
 texture<float, 1, cudaReadModeElementType> nbfp_texref;
 
@@ -85,36 +81,6 @@ texture<float, 1, cudaReadModeElementType> coulomb_tab_texref;
 /* Convenience defines */
 #define NCL_PER_SUPERCL         (NBNXN_GPU_NCLUSTER_PER_SUPERCLUSTER)
 #define CL_SIZE                 (NBNXN_GPU_CLUSTER_SIZE)
-
-/* NTHREAD_Z controls the number of j-clusters processed concurrently on NTHREAD_Z
- * warp-pairs per block.
- *
- * - On CC 2.0-3.5, 5.0, and 5.2, NTHREAD_Z == 1, translating to 64 th/block with 16
- * blocks/multiproc, is the fastest even though this setup gives low occupancy.
- * NTHREAD_Z > 1 results in excessive register spilling unless the minimum blocks
- * per multiprocessor is reduced proportionally to get the original number of max
- * threads in flight (and slightly lower performance).
- * - On CC 3.7 there are enough registers to double the number of threads; using
- * NTHREADS_Z == 2 is fastest with 16 blocks (TODO: test with RF and other kernels
- * with low-register use).
- *
- * Note that the current kernel implementation only supports NTHREAD_Z > 1 with
- * shuffle-based reduction, hence CC >= 3.0.
- */
-
-/* Kernel launch bounds as function of NTHREAD_Z.
- * - CC 3.5/5.2: NTHREAD_Z=1, (64, 16) bounds
- * - CC 3.7:     NTHREAD_Z=2, (128, 16) bounds
- */
-#if __CUDA_ARCH__ == 370
-#define NTHREAD_Z           (2)
-#define MIN_BLOCKS_PER_MP   (16)
-#else
-#define NTHREAD_Z           (1)
-#define MIN_BLOCKS_PER_MP   (16)
-#endif
-#define THREADS_PER_BLOCK   (CL_SIZE*CL_SIZE*NTHREAD_Z)
-
 
 /***** The kernels come here *****/
 #include "gromacs/mdlib/nbnxn_cuda/nbnxn_cuda_kernel_utils.cuh"
@@ -281,9 +247,11 @@ static inline nbnxn_cu_kfunc_ptr_t select_nbnxn_kernel(int  eeltype,
 }
 
 /*! Calculates the amount of shared memory required by the CUDA kernel in use. */
-static inline int calc_shmem_required(const int num_threads_z)
+static inline int calc_shmem_required(const int num_threads_z, gmx_device_info_t gmx_unused *dinfo)
 {
     int shmem;
+
+    assert(dinfo);
 
     /* size of shmem (force-buffers/xq/atom type preloading) */
     /* NOTE: with the default kernel on sm3.0 we need shmem only for pre-loading */
@@ -291,15 +259,19 @@ static inline int calc_shmem_required(const int num_threads_z)
     shmem  = NCL_PER_SUPERCL * CL_SIZE * sizeof(float4);
     /* cj in shared memory, for each warp separately */
     shmem += num_threads_z * 2 * NBNXN_GPU_JGROUP_SIZE * sizeof(int);
-#ifdef IATYPE_SHMEM
-    /* i-atom types in shared memory */
-    shmem += NCL_PER_SUPERCL * CL_SIZE * sizeof(int);
+    /* CUDA versions below 4.2 won't generate code for sm>=3.0 */
+#if GMX_CUDA_VERSION >= 4200
+    if (dinfo->prop.major >= 3)
+    {
+        /* i-atom types in shared memory */
+        shmem += NCL_PER_SUPERCL * CL_SIZE * sizeof(int);
+    }
+    if (dinfo->prop.major < 3)
 #endif
-#if __CUDA_ARCH__ < 300
-    /* force reduction buffers in shared memory */
-    shmem += CL_SIZE * CL_SIZE * 3 * sizeof(float);
-#endif
-
+    {
+        /* force reduction buffers in shared memory */
+        shmem += CL_SIZE * CL_SIZE * 3 * sizeof(float);
+    }
     return shmem;
 }
 
@@ -312,12 +284,13 @@ static inline int calc_shmem_required(const int num_threads_z)
 
    These operations are issued in the local stream at the beginning of the step
    and therefore always complete before the local kernel launch. The non-local
-   kernel is launched after the local on the same device/context, so this is
+   kernel is launched after the local on the same device/context hence it is
    inherently scheduled after the operations in the local stream (including the
-   above "misc_ops").
-   However, for the sake of having a future-proof implementation, we use the
-   misc_ops_done event to record the point in time when the above  operations
-   are finished and synchronize with this event in the non-local stream.
+   above "misc_ops") on pre-GK110 devices with single hardware queue, but on later
+   devices with multiple hardware queues the dependency needs to be enforced.
+   We use the misc_ops_and_local_H2D_done event to record the point where
+   the local x+q H2D (and all preceding) tasks are complete and synchronize
+   with this event in the non-local stream before launching the non-bonded kernel.
  */
 void nbnxn_gpu_launch_kernel(gmx_nbnxn_cuda_t       *nb,
                              const nbnxn_atomdata_t *nbatom,
@@ -370,22 +343,6 @@ void nbnxn_gpu_launch_kernel(gmx_nbnxn_cuda_t       *nb,
         adat_len    = adat->natoms - adat->natoms_local;
     }
 
-    /* When we get here all misc operations issues in the local stream are done,
-       so we record that in the local stream and wait for it in the nonlocal one. */
-    if (nb->bUseTwoStreams)
-    {
-        if (iloc == eintLocal)
-        {
-            stat = cudaEventRecord(nb->misc_ops_done, stream);
-            CU_RET_ERR(stat, "cudaEventRecord on misc_ops_done failed");
-        }
-        else
-        {
-            stat = cudaStreamWaitEvent(stream, nb->misc_ops_done, 0);
-            CU_RET_ERR(stat, "cudaStreamWaitEvent on misc_ops_done failed");
-        }
-    }
-
     /* beginning of timed HtoD section */
     if (bDoTime)
     {
@@ -396,6 +353,23 @@ void nbnxn_gpu_launch_kernel(gmx_nbnxn_cuda_t       *nb,
     /* HtoD x, q */
     cu_copy_H2D_async(adat->xq + adat_begin, nbatom->x + adat_begin * 4,
                       adat_len * sizeof(*adat->xq), stream);
+
+    /* When we get here all misc operations issues in the local stream as well as
+       the local xq H2D are done,
+       so we record that in the local stream and wait for it in the nonlocal one. */
+    if (nb->bUseTwoStreams)
+    {
+        if (iloc == eintLocal)
+        {
+            stat = cudaEventRecord(nb->misc_ops_and_local_H2D_done, stream);
+            CU_RET_ERR(stat, "cudaEventRecord on misc_ops_and_local_H2D_done failed");
+        }
+        else
+        {
+            stat = cudaStreamWaitEvent(stream, nb->misc_ops_and_local_H2D_done, 0);
+            CU_RET_ERR(stat, "cudaStreamWaitEvent on misc_ops_and_local_H2D_done failed");
+        }
+    }
 
     if (bDoTime)
     {
@@ -428,14 +402,15 @@ void nbnxn_gpu_launch_kernel(gmx_nbnxn_cuda_t       *nb,
      * - The 1D block-grid contains as many blocks as super-clusters.
      */
     int num_threads_z = 1;
-    if (nb->dev_info->prop.major == 3 && nb->dev_info->prop.minor == 7)
+    if ((nb->dev_info->prop.major == 3 && nb->dev_info->prop.minor == 7) ||
+        (nb->dev_info->prop.major == 6 && nb->dev_info->prop.minor == 0))
     {
         num_threads_z = 2;
     }
     nblock    = calc_nb_kernel_nblock(plist->nsci, nb->dev_info);
     dim_block = dim3(CL_SIZE, CL_SIZE, num_threads_z);
     dim_grid  = dim3(nblock, 1, 1);
-    shmem     = calc_shmem_required(num_threads_z);
+    shmem     = calc_shmem_required(num_threads_z, nb->dev_info);
 
     if (debug)
     {
@@ -456,6 +431,11 @@ void nbnxn_gpu_launch_kernel(gmx_nbnxn_cuda_t       *nb,
         stat = cudaEventRecord(t->stop_nb_k[iloc], stream);
         CU_RET_ERR(stat, "cudaEventRecord failed");
     }
+
+#if (defined(WIN32) || defined( _WIN32 ))
+    /* Windows: force flushing WDDM queue */
+    stat = cudaStreamQuery(stream);
+#endif
 }
 
 void nbnxn_gpu_launch_cpyback(gmx_nbnxn_cuda_t       *nb,

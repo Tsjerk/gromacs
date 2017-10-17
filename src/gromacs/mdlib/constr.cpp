@@ -3,7 +3,7 @@
  *
  * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
  * Copyright (c) 2001-2004, The GROMACS development team.
- * Copyright (c) 2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -463,6 +463,8 @@ gmx_bool constrain(FILE *fplog, gmx_bool bLog, gmx_bool bEner,
                     if (th > 0)
                     {
                         clear_mat(constr->vir_r_m_dr_th[th]);
+
+                        constr->settle_error[th] = -1;
                     }
 
                     start_th = (nsettle* th   )/nth;
@@ -530,23 +532,23 @@ gmx_bool constrain(FILE *fplog, gmx_bool bLog, gmx_bool bEner,
 
     if (settle->nr > 0)
     {
-        /* Combine virial and error info of the other threads */
-        for (i = 1; i < nth; i++)
-        {
-            settle_error = constr->settle_error[i];
-        }
         if (vir != NULL)
         {
+            /* Reduce the virial contributions over the threads */
             for (i = 1; i < nth; i++)
             {
                 m_add(vir_r_m_dr, constr->vir_r_m_dr_th[i], vir_r_m_dr);
             }
         }
 
-        if (econq == econqCoord && settle_error >= 0)
+        if (econq == econqCoord)
         {
-            bOK = FALSE;
-            if (constr->maxwarn >= 0)
+            for (i = 1; i < nth; i++)
+            {
+                settle_error = std::max(settle_error, constr->settle_error[i]);
+            }
+
+            if (settle_error >= 0)
             {
                 char buf[256];
                 sprintf(buf,
@@ -564,6 +566,7 @@ gmx_bool constrain(FILE *fplog, gmx_bool bLog, gmx_bool bEner,
                     too_many_constraint_warnings(-1, constr->warncount_settle);
                 }
                 bDump = TRUE;
+
             }
         }
     }

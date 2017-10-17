@@ -3,7 +3,7 @@
  *
  * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
  * Copyright (c) 2001-2004, The GROMACS development team.
- * Copyright (c) 2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -836,7 +836,7 @@ void trotter_update(t_inputrec *ir, gmx_int64_t step, gmx_ekindata_t *ekind,
                     t_extmass *MassQ, int **trotter_seqlist, int trotter_seqno)
 {
 
-    int             n, i, d, ngtc, gc = 0;
+    int             n, i, d, ngtc, gc = 0, t;
     t_grp_tcstat   *tcstat;
     t_grpopts      *opts;
     gmx_int64_t     step_eff;
@@ -910,12 +910,12 @@ void trotter_update(t_inputrec *ir, gmx_int64_t step, gmx_ekindata_t *ekind,
                    scale the velocities later, but we need them scaled in order to
                    produce the correct outputs, so we'll scale them here. */
 
-                for (i = 0; i < ngtc; i++)
+                for (t = 0; t < ngtc; t++)
                 {
-                    tcstat                  = &ekind->tcstat[i];
-                    tcstat->vscale_nhc      = scalefac[i];
-                    tcstat->ekinscaleh_nhc *= (scalefac[i]*scalefac[i]);
-                    tcstat->ekinscalef_nhc *= (scalefac[i]*scalefac[i]);
+                    tcstat                  = &ekind->tcstat[t];
+                    tcstat->vscale_nhc      = scalefac[t];
+                    tcstat->ekinscaleh_nhc *= (scalefac[t]*scalefac[t]);
+                    tcstat->ekinscalef_nhc *= (scalefac[t]*scalefac[t]);
                 }
                 /* now that we've scaled the groupwise velocities, we can add them up to get the total */
                 /* but do we actually need the total? */
@@ -1029,7 +1029,7 @@ extern void init_npt_masses(t_inputrec *ir, t_state *state, t_extmass *MassQ, gm
         /* now, set temperature variables */
         for (i = 0; i < ngtc; i++)
         {
-            if ((opts->tau_t[i] > 0) && (opts->ref_t[i] > 0))
+            if (opts->tau_t[i] > 0 && opts->ref_t[i] > 0 && opts->nrdf[i] > 0)
             {
                 reft = std::max<real>(0, opts->ref_t[i]);
                 nd   = opts->nrdf[i];
@@ -1068,6 +1068,11 @@ int **init_npt_vars(t_inputrec *ir, t_state *state, t_extmass *MassQ, gmx_bool b
     opts    = &(ir->opts); /* just for ease of referencing */
     nnhpres = state->nnhpres;
     nh      = state->nhchainlength;
+
+    if (EI_VV(ir->eI) && (ir->epc == epcMTTK) && (ir->etc != etcNOSEHOOVER))
+    {
+        gmx_fatal(FARGS, "Cannot do MTTK pressure coupling without Nose-Hoover temperature control");
+    }
 
     init_npt_masses(ir, state, MassQ, TRUE);
 

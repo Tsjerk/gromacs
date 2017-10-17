@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2014, by the GROMACS development team, led by
+ * Copyright (c) 2015, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -32,20 +32,42 @@
  * To help us fund GROMACS development, we humbly ask that you cite
  * the research papers on the package. Check out http://www.gromacs.org.
  */
-#ifndef GMX_GMXPREPROCESS_PROTONATE_H
-#define GMX_GMXPREPROCESS_PROTONATE_H
+/*! \internal \file
+ * \brief
+ * Implements classes from testfileredirector.h.
+ *
+ * \author Teemu Murtola <teemu.murtola@gmail.com>
+ * \ingroup module_testutils
+ */
+#include "gmxpre.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-#if 0
+#include "testfileredirector.h"
+
+#include <set>
+#include <string>
+
+namespace gmx
+{
+namespace test
+{
+
+TestFileInputRedirector::TestFileInputRedirector()
+{
 }
-#endif
 
-int gmx_protonate(int argc, char *argv[]);
-
-#ifdef __cplusplus
+TestFileInputRedirector::~TestFileInputRedirector()
+{
 }
-#endif
 
-#endif
+void TestFileInputRedirector::addExistingFile(const char *filename)
+{
+    existingFiles_.insert(filename);
+}
+
+bool TestFileInputRedirector::fileExists(const char *filename) const
+{
+    return existingFiles_.count(filename) > 0;
+}
+
+} // namespace test
+} // namespace gmx

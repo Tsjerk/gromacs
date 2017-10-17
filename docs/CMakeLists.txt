@@ -1,7 +1,7 @@
 #
 # This file is part of the GROMACS molecular simulation package.
 #
-# Copyright (c) 2014,2015, by the GROMACS development team, led by
+# Copyright (c) 2014,2015,2016, by the GROMACS development team, led by
 # Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
 # and including many others, as listed in the AUTHORS file in the
 # top-level source directory and at http://www.gromacs.org.
@@ -59,7 +59,7 @@ mark_as_advanced(SOURCE_MD5SUM)
 set(EXPECTED_DOXYGEN_VERSION 1.8.5)
 
 find_package(PythonInterp)
-find_package(Sphinx 1.2.3 COMPONENTS pygments)
+find_package(Sphinx 1.2.3 QUIET COMPONENTS pygments)
 
 # Even if we aren't going to make the full webpage, set up to put all
 # the documentation output in the same place, for convenience
@@ -79,6 +79,10 @@ add_subdirectory(doxygen)
 add_subdirectory(manual)
 
 if (SPHINX_FOUND)
+    set(SPHINX_THEME default)
+    if (NOT SPHINX_EXECUTABLE_VERSION VERSION_LESS 1.3)
+        set(SPHINX_THEME classic)
+    endif()
     # We need to have all the Sphinx input files in a single directory, and
     # since some of them are generated, we copy everything into the build tree,
     # to this directory.
@@ -147,9 +151,11 @@ if (SPHINX_FOUND)
 
     gmx_configure_version_file(conf-vars.py.cmakein ${SPHINX_CONFIG_VARS_FILE}
         EXTRA_VARS
+            SPHINX_THEME
             SPHINX_EXTENSION_PATH
             EXPECTED_DOXYGEN_VERSION
             GMX_CMAKE_MINIMUM_REQUIRED_VERSION REQUIRED_CUDA_VERSION
+            REQUIRED_OPENCL_MIN_VERSION
             REQUIRED_CUDA_COMPUTE_CAPABILITY REGRESSIONTEST_VERSION
             SOURCE_MD5SUM REGRESSIONTEST_MD5SUM_STRING
         COMMENT "Configuring Sphinx configuration file")
@@ -249,6 +255,10 @@ else()
         COMMAND ${CMAKE_COMMAND} -E echo
             "HTML pages cannot be built because Sphinx is not available"
         VERBATIM)
+    add_custom_target(install-guide
+        COMMAND ${CMAKE_COMMAND} -E echo
+            "INSTALL cannot be built because Sphinx is not available"
+        VERBATIM)
     add_custom_target(man
         COMMAND ${CMAKE_COMMAND} -E echo
             "man pages cannot be built because Sphinx is not available"
@@ -263,10 +273,6 @@ if (MAN_PAGE_DIR)
         DESTINATION ${MAN_INSTALL_DIR}/man1
         COMPONENT man OPTIONAL
         FILES_MATCHING PATTERN "*.1")
-    install(DIRECTORY ${MAN_PAGE_DIR}/
-        DESTINATION ${MAN_INSTALL_DIR}/man7
-        COMPONENT man OPTIONAL
-        FILES_MATCHING PATTERN "*.7")
 endif()
 gmx_cpack_add_generated_source_directory(man)
 

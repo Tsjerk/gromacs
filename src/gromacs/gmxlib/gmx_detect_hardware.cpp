@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2012,2013,2014,2015, by the GROMACS development team, led by
+ * Copyright (c) 2012,2013,2014,2015,2016, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -77,10 +77,51 @@
 
 
 #ifdef GMX_GPU
-const gmx_bool bGPUBinary = TRUE;
-#else
-const gmx_bool bGPUBinary = FALSE;
-#endif
+
+static const bool  bGPUBinary = TRUE;
+
+#  ifdef GMX_USE_OPENCL
+
+static const char *gpu_implementation       = "OpenCL";
+/* Our current OpenCL implementation only supports using exactly one
+ * GPU per PP rank, so sharing is impossible */
+static const bool bGpuSharingSupported      = false;
+/* Our current OpenCL implementation seems to handle concurrency
+ * correctly with thread-MPI. The AMD OpenCL runtime does not seem to
+ * support creating a context from more than one real MPI rank on the
+ * same node (it segfaults when you try).
+ */
+#    ifdef GMX_THREAD_MPI
+static const bool bMultiGpuPerNodeSupported = true;
+#    else /* GMX_THREAD_MPI */
+/* Real MPI and no MPI */
+static const bool bMultiGpuPerNodeSupported = false;
+#    endif
+
+#  else /* GMX_USE_OPENCL */
+
+// Our CUDA implementation supports everything
+static const char *gpu_implementation        = "CUDA";
+static const bool  bGpuSharingSupported      = true;
+static const bool  bMultiGpuPerNodeSupported = true;
+
+#  endif /* GMX_USE_OPENCL */
+
+#else    /* GMX_GPU */
+
+// Not compiled with GPU support
+static const bool  bGPUBinary                = false;
+static const char *gpu_implementation        = "non-GPU";
+static const bool  bGpuSharingSupported      = false;
+static const bool  bMultiGpuPerNodeSupported = false;
+
+#endif /* GMX_GPU */
+
+/* Names of the GPU detection/check results (see e_gpu_detect_res_t in hw_info.h). */
+const char * const gpu_detect_res_str[egpuNR] =
+{
+    "compatible", "inexistent", "incompatible", "insane"
+};
 
 static const char * invalid_gpuid_hint =
     "A delimiter-free sequence of valid numeric IDs of available GPUs is expected.";
@@ -98,6 +139,16 @@ static tMPI_Thread_mutex_t hw_info_lock = TMPI_THREAD_MUTEX_INITIALIZER;
 static void set_gpu_ids(gmx_gpu_opt_t *gpu_opt, int nrank, int rank);
 static int gmx_count_gpu_dev_unique(const gmx_gpu_info_t *gpu_info,
                                     const gmx_gpu_opt_t  *gpu_opt);
+
+gmx_bool gmx_multiple_gpu_per_node_supported()
+{
+    return bMultiGpuPerNodeSupported;
+}
+
+gmx_bool gmx_gpu_sharing_supported()
+{
+    return bGpuSharingSupported;
+}
 
 static void sprint_gpus(char *sbuf, const gmx_gpu_info_t *gpu_info)
 {
@@ -210,10 +261,10 @@ makeGpuUsageReport(const gmx_gpu_info_t *gpu_info,
     }
 
     {
-        std::vector<int>   gpuIdsInUse;
+        std::vector<int> gpuIdsInUse;
         for (int i = 0; i < ngpu_use; i++)
         {
-            gpuIdsInUse.push_back(get_cuda_gpu_device_id(gpu_info, gpu_opt, i));
+            gpuIdsInUse.push_back(get_gpu_device_id(gpu_info, gpu_opt, i));
         }
         std::string gpuIdsString =
             formatAndJoin(gpuIdsInUse, ",", gmx::StringFormatter("%d"));
@@ -415,7 +466,8 @@ void gmx_check_hw_runconf_consistency(FILE                *fplog,
         }
         else
         {
-            if (ngpu_comp > npppn)
+            /* TODO Should we have a gpu_opt->n_dev_supported field? */
+            if (ngpu_comp > npppn && gmx_multiple_gpu_per_node_supported())
             {
                 md_print_warn(cr, fplog,
                               "NOTE: potentially sub-optimal launch configuration, %s started with less\n"
@@ -435,13 +487,26 @@ void gmx_check_hw_runconf_consistency(FILE                *fplog,
                  */
                 if (cr->rank_pp_intranode == 0)
                 {
+                    std::string reasonForLimit;
+                    if (ngpu_comp > 1 &&
+                        ngpu_use == 1 &&
+                        !gmx_multiple_gpu_per_node_supported())
+                    {
+                        reasonForLimit  = "can be used by ";
+                        reasonForLimit += gpu_implementation;
+                        reasonForLimit += " in GROMACS";
+                    }
+                    else
+                    {
+                        reasonForLimit = "was detected";
+                    }
                     gmx_fatal(FARGS,
                               "Incorrect launch configuration: mismatching number of PP %s%s and GPUs%s.\n"
-                              "%s was started with %d PP %s%s%s, but only %d GPU%s were detected.",
+                              "%s was started with %d PP %s%s%s, but only %d GPU%s %s.",
                               th_or_proc, btMPI ? "s" : "es", pernode,
                               ShortProgram(), npppn, th_or_proc,
                               th_or_proc_plural, pernode,
-                              ngpu_use, gpu_use_plural);
+                              ngpu_use, gpu_use_plural, reasonForLimit.c_str());
                 }
             }
         }
@@ -525,7 +590,10 @@ static int gmx_count_gpu_dev_unique(const gmx_gpu_info_t *gpu_info,
      * to 1 indicates that the respective GPU was selected to be used. */
     for (i = 0; i < gpu_opt->n_dev_use; i++)
     {
-        uniq_ids[get_cuda_gpu_device_id(gpu_info, gpu_opt, i)] = 1;
+        int device_id;
+
+        device_id           = gmx_gpu_sharing_supported() ? get_gpu_device_id(gpu_info, gpu_opt, i) : i;
+        uniq_ids[device_id] = 1;
     }
     /* Count the devices used. */
     for (i = 0; i < ngpu; i++)
@@ -566,10 +634,17 @@ static int get_ncores(gmx_cpuid_t cpuid)
  * reported to be online by the OS at the time of the call. The
  * definition of "processor" is according to an old POSIX standard.
  *
+ * On e.g. Arm, the Linux kernel can use advanced power saving features where
+ * processors are brought online/offline dynamically. This will cause
+ * _SC_NPROCESSORS_ONLN to report 1 at the beginning of the run. For this
+ * reason we now first try to use the number of configured processors, but
+ * also warn if they mismatch.
+ *
  * Note that the number of hardware threads is generally greater than
  * the number of cores (e.g. x86 hyper-threading, Power). Managing the
  * mapping of software threads to hardware threads is managed
- * elsewhere. */
+ * elsewhere.
+ */
 static int get_nthreads_hw_avail(FILE gmx_unused *fplog, const t_commrec gmx_unused *cr)
 {
     int ret = 0;
@@ -583,16 +658,46 @@ static int get_nthreads_hw_avail(FILE gmx_unused *fplog, const t_commrec gmx_unu
     /* We are probably on Unix.
      * Now check if we have the argument to use before executing the call
      */
-#if defined(_SC_NPROCESSORS_ONLN)
+#if defined(_SC_NPROCESSORS_CONF)
+    ret = sysconf(_SC_NPROCESSORS_CONF);
+#    if defined(_SC_NPROCESSORS_ONLN)
+    if (ret != sysconf(_SC_NPROCESSORS_ONLN))
+    {
+        /* We assume that this scenario means that the kernel has
+           disabled threads or cores, and that the only safe course is
+           to assume that _SC_NPROCESSORS_ONLN should be used. Even
+           this may not be valid if running in a containerized
+           environment, such system calls may read from
+           /sys/devices/system/cpu and report what the OS sees, rather
+           than what the container cgroup is supposed to set up as
+           limits. But we're not sure right now whether there's any
+           (standard-ish) way to handle that. */
+#if defined(_M_ARM) || defined(__arm__) || defined(__ARM_ARCH) || defined (__aarch64__)
+        md_print_warn(cr, fplog,
+                      "%d CPUs configured, but only %d of them are online.\n"
+                      "This can happen on embedded platforms (e.g. ARM) where the OS shuts some cores\n"
+                      "off to save power, and will turn them back on later when the load increases.\n"
+                      "However, this will likely mean GROMACS cannot pin threads to those cores. You\n"
+                      "will likely see much better performance by forcing all cores to be online, and\n"
+                      "making sure they run at their full clock frequency.", ret, sysconf(_SC_NPROCESSORS_ONLN));
+#else
+        /* On x86 this means HT is disabled by the kernel, not in the bios */
+        md_print_warn(cr, fplog,
+                      "Note: %d CPUs configured, but only %d of them are online.",
+                      ret, sysconf(_SC_NPROCESSORS_ONLN));
+        /* We use the online count to avoid (potential) oversubscription */
+        ret = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+    }
+#    endif
+#elif defined(_SC_NPROC_CONF)
+    ret = sysconf(_SC_NPROC_CONF);
+#elif defined(_SC_NPROCESSORS_ONLN)
     ret = sysconf(_SC_NPROCESSORS_ONLN);
 #elif defined(_SC_NPROC_ONLN)
     ret = sysconf(_SC_NPROC_ONLN);
-#elif defined(_SC_NPROCESSORS_CONF)
-    ret = sysconf(_SC_NPROCESSORS_CONF);
-#elif defined(_SC_NPROC_CONF)
-    ret = sysconf(_SC_NPROC_CONF);
 #else
-#warning "No valid sysconf argument value found. Executables will not be able to determine the number of logical cores: mdrun will use 1 thread by default!"
+#    warning "No valid sysconf argument value found. Executables will not be able to determine the number of logical cores: mdrun will use 1 thread by default!"
 #endif /* End of check for sysconf argument values */
 
 #else
@@ -1044,6 +1149,27 @@ void gmx_print_detected_hardware(FILE *fplog, const t_commrec *cr,
     check_use_of_rdtscp_on_this_cpu(fplog, cr, hwinfo);
 }
 
+//! \brief Return if any GPU ID (e.g in a user-supplied string) is repeated
+static gmx_bool anyGpuIdIsRepeated(const gmx_gpu_opt_t *gpu_opt)
+{
+    /* Loop over IDs in the string */
+    for (int i = 0; i < gpu_opt->n_dev_use - 1; ++i)
+    {
+        /* Look for the ID in location i in the following part of the
+           string */
+        for (int j = i + 1; j < gpu_opt->n_dev_use; ++j)
+        {
+            if (gpu_opt->dev_use[i] == gpu_opt->dev_use[j])
+            {
+                /* Same ID found in locations i and j */
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
 void gmx_parse_gpu_ids(gmx_gpu_opt_t *gpu_opt)
 {
     char *env;
@@ -1072,7 +1198,14 @@ void gmx_parse_gpu_ids(gmx_gpu_opt_t *gpu_opt)
         parse_digits_from_plain_string(env,
                                        &gpu_opt->n_dev_use,
                                        &gpu_opt->dev_use);
-
+        if (!gmx_multiple_gpu_per_node_supported() && 1 < gpu_opt->n_dev_use)
+        {
+            gmx_fatal(FARGS, "The %s implementation only supports using exactly one PP rank per node", gpu_implementation);
+        }
+        if (!gmx_gpu_sharing_supported() && anyGpuIdIsRepeated(gpu_opt))
+        {
+            gmx_fatal(FARGS, "The %s implementation only supports using exactly one PP rank per GPU", gpu_implementation);
+        }
         if (gpu_opt->n_dev_use == 0)
         {
             gmx_fatal(FARGS, "Empty GPU ID string encountered.\n%s\n",
@@ -1175,7 +1308,7 @@ static void set_gpu_ids(gmx_gpu_opt_t *gpu_opt, int nrank, int rank)
     {
         if (nrank % gpu_opt->n_dev_compatible == 0)
         {
-            nshare = nrank/gpu_opt->n_dev_compatible;
+            nshare = gmx_gpu_sharing_supported() ? nrank/gpu_opt->n_dev_compatible : 1;
         }
         else
         {
@@ -1196,6 +1329,10 @@ static void set_gpu_ids(gmx_gpu_opt_t *gpu_opt, int nrank, int rank)
 
     /* Here we will waste GPUs when nrank < gpu_opt->n_dev_compatible */
     gpu_opt->n_dev_use = std::min(gpu_opt->n_dev_compatible*nshare, nrank);
+    if (!gmx_multiple_gpu_per_node_supported())
+    {
+        gpu_opt->n_dev_use = std::min(gpu_opt->n_dev_use, 1);
+    }
     snew(gpu_opt->dev_use, gpu_opt->n_dev_use);
     for (int i = 0; i != gpu_opt->n_dev_use; ++i)
     {

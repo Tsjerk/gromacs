@@ -395,7 +395,8 @@ Output control
 
 .. mdp:: energygrps
 
-   group(s) to write to energy file
+   group(s) for which to write to write short-ranged non-bonded
+   potential energies to the energy file (not supported on GPUs)
 
 
 Neighbor searching
@@ -1483,7 +1484,7 @@ Bonds
 Energy group exclusions
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-.. mdp:: energygrp-excl:
+.. mdp:: energygrp-excl
 
    Pairs of energy groups for which all non-bonded interactions are
    excluded. An example: if you have two energy groups ``Protein`` and
@@ -1695,17 +1696,7 @@ applicable pulling coordinate.
    system, *e.g.* a water slab (see Engin et al. J. Chem. Phys. B
    2010).
 
-.. mdp:: pull-coord1-groups
-
-   The two groups indices should be given on which this pull
-   coordinate will operate. The first index can be 0, in which case an
-   absolute reference of :mdp:`pull-coord1-origin` is used. With an
-   absolute reference the system is no longer translation invariant
-   and one should think about what to do with the center of mass
-   motion. Note that (only) for :mdp:`pull-coord1-geometry` =
-   :mdp-value:`direction-relative` four groups are required.
-
-.. mdp:: pull-coord1-type:
+.. mdp:: pull-coord1-type
 
    .. mdp-value:: umbrella
 
@@ -1779,6 +1770,16 @@ applicable pulling coordinate.
       from the COM of the pull group has both a radial and an axial
       component. This geometry is not supported with constraint
       pulling.
+
+.. mdp:: pull-coord1-groups
+
+   The two groups indices should be given on which this pull
+   coordinate will operate. The first index can be 0, in which case an
+   absolute reference of :mdp:`pull-coord1-origin` is used. With an
+   absolute reference the system is no longer translation invariant
+   and one should think about what to do with the center of mass
+   motion. Note that (only) for :mdp:`pull-coord1-geometry` =
+   :mdp-value:`direction-relative` four groups are required.
 
 .. mdp:: pull-coord1-dim
 
@@ -2438,7 +2439,7 @@ Expanded Ensemble calculations
    minimum number of samples that each state that are allowed before
    the min-variance strategy is activated if selected.
 
-.. mdp:: init-lambda-weights:
+.. mdp:: init-lambda-weights
 
    The initial weights (free energies) used for the expanded ensemble
    states. Default is a vector of zero weights. format is similar to
@@ -2608,7 +2609,7 @@ Electric fields
    nm^-1, the third number: the phase of the cosine, you can enter any
    number here since a cosine of frequency zero has no phase.
 
-.. mdp:: E-xt; E-yt; E-zt:
+.. mdp:: E-xt; E-yt; E-zt
 
    Here you can specify a pulsed alternating electric field. The field
    has the form of a gaussian laser pulse:
