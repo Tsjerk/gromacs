@@ -2971,7 +2971,7 @@ static void calc_nrdf(gmx_mtop_t *mtop, t_inputrec *ir, char **gnames)
                     nrdf_vcm_sub[j] = 6;
                     break;
                 case ecmRTC:
-                    nrdy_vcm_sub[j] = 6;
+                    nrdf_vcm_sub[j] = 6;
                     break;
                 default:
                     gmx_incons("Checking comm_mode");
