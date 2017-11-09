@@ -3660,7 +3660,7 @@ void do_index(const char* mdparin, const char *ndx,
     bRest           =
         do_numbering(natoms, groups, nvcm, ptr1, grps, gnames, egcVCM,
                      restnm, nvcm == 0 ? egrptpALL_GENREST : egrptpPART, bVerbose, wi);
-    if (bRest && !ir->comm_mode == ecmRTC)
+    if (bRest && !(ir->comm_mode == ecmRTC))
     {
         warning(wi, "Some atoms are not part of any center of mass motion removal group.\n"
                 "This may lead to artifacts.\n"
