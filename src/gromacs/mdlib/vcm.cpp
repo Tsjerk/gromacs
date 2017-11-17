@@ -600,11 +600,15 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     /* Set stuff for RTC groups */
     snew(rtc, 1);
     rtc->nr = groups->grps[egcVCM].nr;
+    /*
+    fprintf(stderr, "%d RTC groups -> ", rtc->nr);
     if (rtc->nr > 1)
     {
         rtc->nr--;
     }
-
+    fprintf(stderr, "%d RTC groups\n", rtc->nr);
+    */
+    
     snew(rtc->refcom,   rtc->nr+1);
     snew(rtc->invinert, rtc->nr+1);    
     snew(rtc->outerx,   rtc->nr+1);
