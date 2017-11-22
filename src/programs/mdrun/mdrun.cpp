@@ -234,6 +234,7 @@ int gmx_mdrun(int argc, char *argv[])
         { efCPT, "-cpo",    NULL,       ffOPTWR },
         { efSTO, "-c",      "confout",  ffWRITE },
         { efSTO, "-rtc",    "rtcref",   ffOPTRD },
+        { efDAT, "-rtclog", "rtc",      ffOPTWR },
         { efEDR, "-e",      "ener",     ffWRITE },
         { efLOG, "-g",      "md",       ffWRITE },
         { efXVG, "-dhdl",   "dhdl",     ffOPTWR },

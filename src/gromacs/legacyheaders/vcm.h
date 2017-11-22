@@ -80,6 +80,7 @@ typedef struct {
 
   int    nst;                  /* Frequency (steps) for update (nstcomm) */
   real   dt;                   /* Integration time step                  */
+  double time;                 /* Time for logging                       */
 
   rvec   *outerc;              /* Cumulative some of cross products      */
   rvec   *sumc;                /* Cumulative some of deviations          */

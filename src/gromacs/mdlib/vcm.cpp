@@ -323,7 +323,28 @@ void do_stopcm_grp(FILE *fp, int *la2ga, int start, int homenr, unsigned short *
             /* Shift for positions */
             svmul(1.0/vcm->group_mass[g], rtc->sumx[g], shiftx[g]);
             outer_inc(axisx[g], rtc->refcom[g], shiftx[g]);
+
         }
+
+	if (rtc->log)
+	{
+	    rtc->time += rtc->nst * rtc->dt;
+  	    fprintf(rtc->log, "%10.5f ", rtc->time);
+	    for (g=0; g<rtc->nr; g++)
+	    {
+  	        fprintf(rtc->log, "%g %g %g %g %g %g %g %g %g ",
+			axisx[g][0], axisx[g][1], axisx[g][2],
+			outerx[g][0], outerx[g][1], outerx[g][2],
+			shiftx[g][0], shiftx[g][1], shiftx[g][2]
+			);
+		fprintf(rtc->log, "%g %g %g %g %g %g %g %g %g ",
+			axisv[g][0], axisv[g][1], axisv[g][2],
+			outerv[g][0], outerv[g][1], outerv[g][2],
+			shiftv[g][0], shiftv[g][1], shiftv[g][2]
+			);
+	    }
+	    fprintf(rtc->log, "\n");
+	}
 
         /* Determine per particle correction */
         g = 0;
@@ -629,13 +650,22 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
         clear_rvec(rtc->sumc[g]);
         clear_mat(rtc->invinert[g]);
     }
-    rtc->xp  = NULL;
-    rtc->nst = ir->nstcomm;
-    rtc->dt  = ir->delta_t;
+    rtc->xp   = NULL;
+    rtc->nst  = ir->nstcomm;
+    rtc->dt   = ir->delta_t;
+    rtc->time = ir->init_t; 
 
+    rtc->log = NULL;
+    
     /* Read in the reference file if one is given */
     if (MASTER(cr))
     {
+        if (fnLOG)
+	{
+	    rtc->log = gmx_ffopen(fnLOG, "w");
+	    fprintf(stderr, "Logging RTC correction per step to %s\n", fnLOG);
+	}
+	
         read_tpx_state(fnTPX, NULL, &start_state, NULL, NULL);
 
         fprintf(stderr,"Reading RTC reference coordinates from %s\n", fnRTC ? fnRTC : fnTPX);
@@ -754,3 +784,4 @@ void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bo
         rvec_inc(rtc->sumc[g], d);
     }
 }
+

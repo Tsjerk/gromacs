@@ -291,7 +291,8 @@ double do_md(FILE *fplog, t_commrec *cr, int nfile, const t_filenm fnm[],
     if (ir->comm_mode == ecmRTC)
     {
         vcm->rtc = init_rtc(top_global,mdatoms,cr,ir,opt2fn_null("-rtc",nfile,fnm),
-                            NULL,state_global->x,ftp2fn(efTPR,nfile,fnm));
+                            opt2fn_null("-rtclog",nfile,fnm),
+			    state_global->x, ftp2fn(efTPR,nfile,fnm));
     }
 
     clear_mat(total_vir);
