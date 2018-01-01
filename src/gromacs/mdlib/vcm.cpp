@@ -178,7 +178,7 @@ void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
                 clear_rvec(rtc->sumx[g]); 
                 clear_rvec(rtc->outerv[g]);
                 clear_rvec(rtc->sumv[g]); 
-                if (md->nMassPerturbed)
+                if (0 && md->nMassPerturbed)
                 {
                     clear_rvec(rtc->refcom[g]);
                 }
@@ -231,7 +231,7 @@ void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
                 outer_inc(d,rtc->xref[gi],rtc->outerv[g]);
                 rvec_inc(rtc->sumv[g],d);
 
-                if (md->nMassPerturbed)
+                if (0 && md->nMassPerturbed)
                 {
                     svmul(m0,rtc->xref[gi],d);
                     rvec_inc(rtc->refcom[g],d);

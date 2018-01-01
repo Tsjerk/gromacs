@@ -287,7 +287,7 @@ void global_stat(FILE *fplog, gmx_global_stat_t gs,
         }
         else if (vcm->mode == ecmRTC)
         {
-            if (vcm->rtc->bFEP)
+            if (0 && vcm->rtc->bFEP)
             {
                 ici   = add_binr(rb, DIM*vcm->rtc->nr, vcm->rtc->refcom[0]);
                 where();
@@ -418,7 +418,7 @@ void global_stat(FILE *fplog, gmx_global_stat_t gs,
         }
         else if (vcm->mode == ecmRTC)
         {
-            if (vcm->rtc->bFEP)
+            if (0 && vcm->rtc->bFEP)
             {
                 extract_binr(rb,ici,DIM*vcm->nr, vcm->rtc->refcom[0]);
                 where();
