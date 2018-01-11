@@ -169,9 +169,24 @@ void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
     rvec   j0, d;
     t_rtc  *rtc=NULL;
     
-    rtc = vcm->rtc;
     int nthreads = gmx_omp_nthreads_get(emntDefault);
     
+    if (vcm->mode == ecmRTC)
+    {
+        rtc = vcm->rtc;
+	for (g = 0; g < rtc->nr; g++)
+	{
+	    clear_rvec(rtc->outerx[g]);
+	    clear_rvec(rtc->sumx[g]); 
+	    clear_rvec(rtc->outerv[g]);
+	    clear_rvec(rtc->sumv[g]); 
+	    if (md->nMassPerturbed)
+	    {
+		clear_rvec(rtc->refcom[g]);
+	    }	    
+	}
+    }
+
     if (vcm->mode != ecmNO) 
     {
 #pragma omp parallel num_threads(nthreads)
@@ -239,27 +254,6 @@ void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
                 clear_rvec(vcm->group_w[g]);
                 clear_mat(vcm->group_i[g]);
             }
-            if (vcm->mode == ecmRTC && g < rtc->nr)
-            {
-                clear_rvec(rtc->outerx[g]);
-                clear_rvec(rtc->sumx[g]); 
-                clear_rvec(rtc->outerv[g]);
-                clear_rvec(rtc->sumv[g]); 
-                if (md->nMassPerturbed)
-                {
-                    clear_rvec(rtc->refcom[g]);
-                }
-            }
-        }
-
-        g = 0;
-        for (i = start; (i < start+homenr); i++)
-        {
-            m0 = md->massT[i];
-            if (md->cVCM)
-            {
-                g = md->cVCM[i];
-            }
 
             for (int t = 0; t < nthreads; t++)
             {
@@ -272,35 +266,43 @@ void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
                     rvec_inc(vcm->group_x[g], vcm_t->x);
                     m_add(vcm_t->i, vcm->group_i[g], vcm->group_i[g]);
                 }
-	            else if (vcm->mode == ecmRTC)
-    	        {
-		            gi = la2ga ? la2ga[i] : i;
-		            
-		            if (g >= rtc->nr)
-		                continue;
-
-		            /* 
-		                RTC stuff from velocities
-		                Correction is applied to current positions based on past velocities,
-		                and to current velocities (t or t+dt/2) based on these velocities.
-		                The vectors sumv, outerv, sumx and outerx need to be communicated/collected.
-		             */
-		            svmul(m0,v[i],d);
-		            outer_inc(d,rtc->xref[gi],rtc->outerv[g]);
-		            rvec_inc(rtc->sumv[g],d);
-
-		            if (md->nMassPerturbed)
-		            {
-		                svmul(m0,rtc->xref[gi],d);
-		                rvec_inc(rtc->refcom[g],d);
-		            }
-		        }
-			}
+	    }
         }
 
-        if (vcm->mode == ecmRTC && rtc->nst > 1)
+    }
+
+    if (vcm->mode == ecmRTC)
+    {
+        for (i = start; i < start+homenr; i++)
+	{
+	    g = md->cVCM ? md->cVCM[i] : 0;
+
+	    if (g >= rtc->nr)
+	        continue;
+
+	    gi = la2ga ? la2ga[i] : i;
+	    m0 = md->massT[i];
+	    
+	    /* 
+	       RTC stuff from velocities
+	       Correction is applied to current positions based on past velocities,
+	       and to current velocities (t or t+dt/2) based on these velocities.
+	       The vectors sumv, outerv, sumx and outerx need to be communicated/collected.
+	    */
+	    svmul(m0,v[i],d);
+	    outer_inc(d,rtc->xref[gi],rtc->outerv[g]);
+	    rvec_inc(rtc->sumv[g],d);
+
+	    if (md->nMassPerturbed)
+	    {
+	        svmul(m0,rtc->xref[gi],d);
+		rvec_inc(rtc->refcom[g],d);
+	    }
+	}
+
+        if (rtc->nst > 1)
         {
-	    for (g=0; g<rtc->nr; g++)
+	    for (g = 0; g < rtc->nr; g++)
 	    {
 	        rvec_inc(rtc->sumc[g],   rtc->sumv[g]);
 	        rvec_inc(rtc->outerc[g], rtc->outerv[g]);
