@@ -60,7 +60,8 @@
 #include "gromacs/domdec/ga2la.h" /* Required for applying RTC in parallel */
 #include "gromacs/fileio/confio.h"
 #include "gromacs/topology/mtop_util.h"
- 
+#include "gromacs/mdtypes/state.h"
+
 /* We use the same defines as in gctio.c here */
 /* Shouldn't these be put in mvdata.h? They're now in three different places. */
 
@@ -407,7 +408,7 @@ doStopComMotionAccelerationCorrection(int                   homenr,
     }
 }
 
-void do_stopcm_grp(FILE *fp, int *la2ga, int homenr, unsigned short *group_id,
+void do_stopcm_grp(FILE *fp, int *la2ga, int homenr, const unsigned short *group_id,
                    rvec x[], rvec v[], const t_vcm &vcm)
 {
     int   i, j, gi, g, m;
@@ -749,7 +750,7 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     t_atom  *atom;
     t_state start_state;
 	t_topology top;
-    gmx_mtop_atomlookup_t alook;
+	/*    gmx_mtop_atomlookup_t alook;*/
     matrix  box,mi,T,S;
     real    m0,*tm;
     rvec    di,ri;
@@ -827,7 +828,7 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
         nblock_bc( cr, rtc->nref, rtc->xref);
     }
 
-    alook = gmx_mtop_atomlookup_init(mtop);
+    /*    alook = gmx_mtop_atomlookup_init(mtop);*/
 
     /* Then calculate the COM and matrix of inertia per group */
     g = 0;
@@ -837,8 +838,8 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
         {
             g = groups->grpnr[egcVCM][i];
         }
-        gmx_mtop_atomnr_to_atom(alook, i, &atom);
-        m0 = atom->m;
+	/*        gmx_mtop_atomnr_to_atom(alook, i, &atom);*/
+        m0 = atoms->massT[i];
         tm[g] += m0;
         for (j=0; j<DIM; j++)
         {
@@ -853,7 +854,7 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
         }
     }
 
-    gmx_mtop_atomlookup_destroy(alook);
+    /*    gmx_mtop_atomlookup_destroy(alook);*/
 
     for (g=0; g < rtc->nr; g++)
     {

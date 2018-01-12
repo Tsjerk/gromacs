@@ -469,8 +469,8 @@ double gmx::do_md(FILE *fplog, t_commrec *cr, const gmx::MDLogger &mdlog,
 
     if (ir->comm_mode == ecmRTC)
     {
-        vcm->rtc = init_rtc(top_global,mdatoms,cr,ir,opt2fn_null("-rtc",nfile,fnm),
-                            NULL,state_global->x,ftp2fn(efTPR,nfile,fnm));
+        vcm->rtc = init_rtc(top_global, mdAtoms->mdatoms(), cr, ir, opt2fn_null("-rtc",nfile,fnm),
+                            NULL, as_rvec_array(state_global->x.data()), ftp2fn(efTPR,nfile,fnm));
     }
 
     clear_mat(total_vir);
@@ -1745,7 +1745,7 @@ double gmx::do_md(FILE *fplog, t_commrec *cr, const gmx::MDLogger &mdlog,
         /* This is a good time for bookkeeping rotational constraints */
         if (ir->comm_mode == ecmRTC)
         {
-            purge_rtc(fplog,cr->dd ? cr->dd->gatindex : NULL,mdatoms,state->v,vcm->rtc,bStopCM);
+	    purge_rtc(fplog,cr->dd ? cr->dd->gatindex : NULL, mdatoms, as_rvec_array(state->v.data()), vcm->rtc, bStopCM);
         }
     
         /* The coordinates (x) were unshifted in update */
