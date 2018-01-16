@@ -115,7 +115,7 @@ typedef struct {
 
 t_vcm *init_vcm(FILE *fp, gmx_groups_t *groups, const t_inputrec *ir);
 
-t_rtc *init_rtc(gmx_mtop_t *mtop, t_mdatoms *atoms, t_commrec *cr, t_inputrec *ir,
+t_rtc *init_rtc(gmx_mtop_t *mtop, t_commrec *cr, t_inputrec *ir,
 		const char *fnRTC, const char *fnLOG, rvec *x, const char *fnTPR);
 
 extern void purge_rtc(FILE *fp,int *la2ga,t_mdatoms *md,rvec x[],t_rtc *rtc,gmx_bool bStopCM);

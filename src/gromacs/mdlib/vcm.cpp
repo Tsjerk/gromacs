@@ -736,7 +736,7 @@ void check_cm_grp(FILE *fp, t_vcm *vcm, t_inputrec *ir, real Temp_Max)
  */
 
 t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
-                t_mdatoms   *atoms,  /* atom stuff; need masses             */
+		/*                t_mdatoms   *atoms,  /* atom stuff; need masses             */
                 t_commrec   *cr,     /* communication record                */
                 t_inputrec  *ir,     /* input record                        */
                 const char  *fnRTC,  /* file containing reference structure */
@@ -747,7 +747,7 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     int     natoms,epbc,i,j,k,g;
     char    title[4096]; // Should be STRLEN - from cstringutil.h
     t_atoms refatoms;
-    t_atom  *atom;
+    const t_atom  *atom;
     t_state start_state;
 	t_topology top;
 	/*    gmx_mtop_atomlookup_t alook;*/
@@ -832,6 +832,9 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
 
     /* Then calculate the COM and matrix of inertia per group */
     g = 0;
+    gmx_mtop_atomloop_all_t aloop;
+    int at_global;
+    aloop = gmx_mtop_atomloop_all_init(mtop);
     for (i = 0; i < rtc->nref; i++)
     {
         if (groups->grpnr[egcVCM])
@@ -839,7 +842,8 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
             g = groups->grpnr[egcVCM][i];
         }
 	/*        gmx_mtop_atomnr_to_atom(alook, i, &atom);*/
-        m0 = atoms->massT[i]; /* <-- THIS GOES WRONG */
+	gmx_mtop_atomloop_all_next(aloop, &at_global, &atom);
+        m0 = atom->m; 
         tm[g] += m0;
         for (j=0; j<DIM; j++)
         {
