@@ -467,12 +467,6 @@ double gmx::do_md(FILE *fplog, t_commrec *cr, const gmx::MDLogger &mdlog,
             nfile, fnm, &outf, &mdebin,
             force_vir, shake_vir, mu_tot, &bSimAnn, &vcm, wcycle);
 
-    if (ir->comm_mode == ecmRTC)
-    {
-        vcm->rtc = init_rtc(top_global, mdAtoms->mdatoms(), cr, ir, opt2fn_null("-rtc",nfile,fnm),
-                            NULL, as_rvec_array(state_global->x.data()), ftp2fn(efTPR,nfile,fnm));
-    }
-
     clear_mat(total_vir);
     clear_mat(pres);
     /* Energy terms and groups */
@@ -552,6 +546,12 @@ double gmx::do_md(FILE *fplog, t_commrec *cr, const gmx::MDLogger &mdlog,
                                   &graph, mdAtoms, vsite, shellfc);
 
         update_realloc(upd, state->natoms);
+    }
+
+    if (ir->comm_mode == ecmRTC)
+    {
+        vcm->rtc = init_rtc(top_global, mdAtoms->mdatoms(), cr, ir, opt2fn_null("-rtc",nfile,fnm),
+                            NULL, as_rvec_array(state_global->x.data()), ftp2fn(efTPR,nfile,fnm));
     }
 
     /* Set up interactive MD (IMD) */

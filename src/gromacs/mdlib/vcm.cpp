@@ -839,7 +839,7 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
             g = groups->grpnr[egcVCM][i];
         }
 	/*        gmx_mtop_atomnr_to_atom(alook, i, &atom);*/
-        m0 = atoms->massT[i];
+        m0 = atoms->massT[i]; /* <-- THIS GOES WRONG */
         tm[g] += m0;
         for (j=0; j<DIM; j++)
         {
