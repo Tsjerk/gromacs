@@ -765,10 +765,6 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     /* Set stuff for RTC groups */
     snew(rtc, 1);
     rtc->nr = groups->grps[egcVCM].nr;
-    if (rtc->nr > 1)
-    {
-        rtc->nr--;
-    }
 
     snew(rtc->refcom,   rtc->nr+1);
     snew(rtc->invinert, rtc->nr+1);    
@@ -859,7 +855,6 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     }
 
     /*    gmx_mtop_atomlookup_destroy(alook);*/
-
     for (g=0; g < rtc->nr; g++)
     {
         svmul( 1.0/tm[g], rtc->refcom[g], rtc->refcom[g] );
