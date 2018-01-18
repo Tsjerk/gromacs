@@ -67,12 +67,378 @@
 #define nblock_bc(cr,nr,d) gmx_bcast((nr)*sizeof((d)[0]), (d),(cr))
 #define   snew_bc(cr,d,nr) { if (!MASTER(cr)) snew((d),(nr)); }
 
+
+/*
+ * Roto-translational constraints
+ *
+ * 
+ */
+
 static void outer_inc(rvec x,rvec y,rvec z)
 {
   z[0] += x[1]*y[2]-x[2]*y[1];
   z[1] += x[2]*y[0]-x[0]*y[2];
   z[2] += x[0]*y[1]-x[1]*y[0];
 }
+
+
+static void clear_rtc(t_rtc *rtc, int ngrp)
+{
+    rtc->nr = ngrp - 1; /* Account for possible rest group */
+
+    snew(rtc->refcom,   ngrp);
+    snew(rtc->invinert, ngrp);    
+    snew(rtc->outerx,   ngrp);
+    snew(rtc->outerv,   ngrp);
+    snew(rtc->outerc,   ngrp);
+    snew(rtc->sumx,     ngrp);
+    snew(rtc->sumv,     ngrp); 
+    snew(rtc->sumc,     ngrp); 
+    snew(rtc->tm,       ngrp);
+    for (int g = 0; g < ngrp; g++)
+    {
+        clear_rvec(rtc->refcom[g]);
+        clear_rvec(rtc->outerx[g]);
+        clear_rvec(rtc->outerv[g]);
+        clear_rvec(rtc->outerc[g]);
+        clear_rvec(rtc->sumx[g]);
+        clear_rvec(rtc->sumv[g]);
+        clear_rvec(rtc->sumc[g]);
+        clear_mat(rtc->invinert[g]);
+    }
+    rtc->xp  = NULL;
+}
+
+
+static void read_rtc_ref(const char *fnTPX, const char *fnRTC, gmx_mtop_t *mtop, t_rtc *rtc)
+{
+    t_state start_state;
+    t_topology top;
+    matrix box;
+    int epbc;
+
+    read_tpx_state(fnTPX, NULL, &start_state, NULL);
+
+    fprintf(stderr,"Reading RTC reference coordinates from %s\n", fnRTC ? fnRTC : fnTPX);
+
+    if (fnRTC)
+    {
+	read_tps_conf(fnRTC, &top, &epbc, &(rtc->xref), NULL, box, FALSE );
+	rtc->nref = top.atoms.nr;
+    }
+    else
+    {
+        rtc->nref = mtop->natoms;
+	snew(rtc->xref, mtop->natoms);
+	for (int i=0; i < mtop->natoms; i++)
+	{
+	  copy_rvec(start_state.x[i], rtc->xref[i]);
+	}            
+    }
+}
+
+
+static void init_rtc_loop_over_atoms(gmx_mtop_t *mtop, unsigned char *grps, t_rtc *rtc)
+{
+    int g = 0;
+    real m0;
+
+    gmx_mtop_atomloop_all_t aloop;
+    int at_global;
+    const t_atom  *atom;
+
+    aloop = gmx_mtop_atomloop_all_init(mtop);
+    for (int i = 0; i < rtc->nref; i++)
+    {
+        if (grps)
+        {
+ 	    g = grps[i];
+        }
+	gmx_mtop_atomloop_all_next(aloop, &at_global, &atom);
+        m0 = atom->m; 
+        rtc->tm[g] += m0;
+        for (int j=0; j < DIM; j++)
+        {
+            rtc->refcom[g][j] += m0*rtc->xref[i][j];
+
+            /* Whoever decides to set DIM to something else than 3 
+             * has to make this a double for loop :p
+             */
+            int k = (j+1) % DIM;
+            rtc->invinert[g][j][j] += m0*rtc->xref[i][j]*rtc->xref[i][j];
+            rtc->invinert[g][j][k] += m0*rtc->xref[i][j]*rtc->xref[i][k];
+        }
+    }
+}
+
+
+/*
+ * Called after init_rtc_loop_over_atoms to finalize 
+ * centers of mass and MOI tensors for each group
+ */
+static void init_rtc_finalize_groups(t_rtc *rtc)
+{
+    rvec di;
+    matrix mi;
+
+    for (int g = 0; g < rtc->nr; g++)
+    {
+        svmul( 1.0/rtc->tm[g], rtc->refcom[g], rtc->refcom[g] );
+        di[0] = rtc->refcom[g][0]*rtc->refcom[g][0];
+        di[1] = rtc->refcom[g][1]*rtc->refcom[g][1];
+        di[2] = rtc->refcom[g][2]*rtc->refcom[g][2];
+        for (int i = 0; i<DIM; i++)
+        {
+            int j = (i+1) % DIM;
+            int k = (i+2) % DIM;
+            mi[i][i] = rtc->invinert[g][j][j] + rtc->invinert[g][k][k] - rtc->tm[g]*(di[j]+di[k]);
+            mi[i][j] = mi[j][i] = rtc->tm[g]*rtc->refcom[g][i]*rtc->refcom[g][j] - rtc->invinert[g][i][j];
+        }
+        gmx::invertMatrix(mi, rtc->invinert[g]);
+    }
+}
+
+
+t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
+                t_commrec   *cr,     /* communication record                */
+                t_inputrec  *ir,     /* input record                        */
+                const char  *fnRTC,  /* file containing reference structure */
+                const char  *fnLOG,  /* file for logging/debugging          */
+                rvec        *x,      /* positions of the whole MD system;   */
+                const char  *fnTPX)  /* required if we read in a checkpoint */
+{
+    t_rtc   *rtc;
+
+
+    /* Set stuff for RTC groups */
+    snew(rtc, 1);
+    clear_rtc(rtc, mtop->groups.grps[egcVCM].nr + 1);
+    rtc->nst = ir->nstcomm;
+    rtc->dt  = ir->delta_t;
+
+    /* Read in the reference file if one is given */
+    if (MASTER(cr))
+    {
+      read_rtc_ref(fnTPX, fnRTC, mtop, rtc);
+    }
+
+    /* Now have to communicate the whole lot */
+    if (PAR(cr))
+    {
+        block_bc(  cr, rtc->nref           );
+        snew_bc(   cr, rtc->xref, rtc->nref);
+        nblock_bc( cr, rtc->nref, rtc->xref);
+    }
+
+    /* Then calculate the COM and matrix of inertia per group */
+    init_rtc_loop_over_atoms(mtop, mtop->groups.grpnr[egcVCM], rtc);
+    init_rtc_finalize_groups(rtc);
+
+    return rtc;
+}
+
+
+void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bool bStopCM)
+{
+    int    i, j, g, gi;
+    real   m0;
+    rvec   d, oc, sc;
+
+    if (bStopCM)
+    {
+        /* We just applied corrections: clear data */
+        for (g=0; g<rtc->nr; g++)
+	{
+	    clear_rvec(rtc->sumc[g]);
+	    clear_rvec(rtc->outerc[g]);
+	}
+
+        /* The velocities have been corrected, so no rotation or com motion this step */
+        return;
+    }
+
+    /* Accumulate data for the next round */
+    g  = 0;
+    for (i = 0; i < md->homenr; i++) 
+    {
+        m0 = md->massT[i];
+
+        if (md->cVCM)
+            g = md->cVCM[i];
+        
+        gi = la2ga ? la2ga[i] : i;
+
+        if (g >= rtc->nr || gi >= rtc->nref)
+        {
+            continue;
+        }
+
+        /* Positions */
+        svmul(m0, v[i], d);
+        outer_inc(d, rtc->xref[gi], rtc->outerc[g]);
+        rvec_inc(rtc->sumc[g], d);
+    }
+}
+
+
+static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *v, t_mdatoms *md, t_rtc *rtc)
+{
+    rvec d;
+
+    for (int g = 0; g < rtc->nr; g++)
+    {
+	clear_rvec(rtc->outerx[g]);
+	clear_rvec(rtc->sumx[g]); 
+	clear_rvec(rtc->outerv[g]);
+	clear_rvec(rtc->sumv[g]); 
+	if (md->nMassPerturbed)
+	{
+	    clear_rvec(rtc->refcom[g]);
+	}	    
+    }
+    
+    for (int i = start; i < start+homenr; i++)
+    {
+	int g = md->cVCM ? md->cVCM[i] : 0;
+	
+	if (g >= rtc->nr)
+	  continue;
+	
+	int gi = la2ga ? la2ga[i] : i;
+	real m0 = md->massT[i];
+	
+	/* 
+	   RTC stuff from velocities
+	   Correction is applied to current positions based on past velocities,
+	   and to current velocities (t or t+dt/2) based on these velocities.
+	   The vectors sumv, outerv, sumx and outerx need to be communicated/collected.
+	*/
+	svmul(m0,v[i],d);
+	outer_inc(d,rtc->xref[gi],rtc->outerv[g]);
+	rvec_inc(rtc->sumv[g],d);
+	
+	if (md->nMassPerturbed)
+	{
+	    svmul(m0,rtc->xref[gi],d);
+	    rvec_inc(rtc->refcom[g],d);
+	}
+    }
+    
+    if (rtc->nst > 1)
+    {
+	for (int g = 0; g < rtc->nr; g++)
+	{
+	    rvec_inc(rtc->sumc[g],   rtc->sumv[g]);
+	    rvec_inc(rtc->outerc[g], rtc->outerv[g]);
+	    
+	    /* Positional correction from velocity depends on time step */
+	    svmul(rtc->dt, rtc->sumc[g],   rtc->sumx[g]);
+	    svmul(rtc->dt, rtc->outerc[g], rtc->outerx[g]);
+	}
+    }
+}
+
+
+static void rtc_apply_grps(int *la2ga, int homenr, const unsigned short *group_id, rvec *x, rvec *v, t_rtc *rtc)
+{
+    /*
+      For the derivation of this check:
+      
+      ...
+      ...
+      
+      Correction per atom
+      
+      x_i'      = x_i + c_i
+      v_i'      = v_i + c_i / dt
+      
+      c_i / dt  = u (x) (r_i - r_com) - p / sum{m}
+                = u (x) r_i - ( u (x) r_com + p / sum{m} )
+                  ~~~~~~~~~   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                  per atom            per group
+                = u (x) r_i - s
+      
+      u         = minv(I_r) . (q + r_com (x) p)
+      s         = u (x) r_com + p / sum{m}
+      
+      Accumulated over k steps:
+      p_x       = sum_k{ sum_j{ m_j * v_jk } }          -- rtc->sumc[g]    
+      q_x       = sum_k{ sum_j{ m_j * v_jk (x) r_j } }  -- rtc->outerc[g]
+      
+      Last step only:
+      p_v       = sum_j{ m_j * v_j }                    -- rtc->sumv[g]
+      q_v       = sum_j{ m_j * v_j (x) r_j }            -- rtc->outerv[g]
+    */
+
+    rvec  *axisx=NULL, *outerx=NULL, *axisv=NULL, *outerv=NULL, *shiftx=NULL, *shiftv=NULL;
+
+    snew(axisx,  rtc->nr);
+    snew(outerx, rtc->nr);
+    snew(shiftx, rtc->nr);
+    
+    snew(axisv,  rtc->nr);
+    snew(outerv, rtc->nr);
+    snew(shiftv, rtc->nr);
+
+    for (int g = 0; g < rtc->nr; g++)
+    {
+	/* Determine the sort-of-axes-of-rotation */
+
+        /* Rotation axis for velocities */
+        outer_inc(rtc->refcom[g], rtc->sumv[g], rtc->outerv[g]);
+	mvmul(rtc->invinert[g], rtc->outerv[g], axisv[g]);   /* u_v */
+	
+	/* Shift for velocities */
+	svmul(1.0/rtc->tm[g], rtc->sumv[g], shiftv[g]);
+	outer_inc(axisv[g], rtc->refcom[g], shiftv[g]);
+        
+	/* Rotation axis for positions */
+	outer_inc(rtc->refcom[g], rtc->sumx[g], rtc->outerx[g]);
+	mvmul(rtc->invinert[g], rtc->outerx[g], axisx[g]);   /* u_x */
+	
+	/* Shift for positions */
+	svmul(1.0/rtc->tm[g], rtc->sumx[g], shiftx[g]);
+	outer_inc(axisx[g], rtc->refcom[g], shiftx[g]);
+    }
+
+    /* Determine per particle correction */
+    int g = 0;
+    for (int i = 0; i < homenr; i++)
+    {
+	if (group_id && (g = group_id[i]) >= rtc->nr)
+	{
+	    continue;
+	}
+	int gi = la2ga ? la2ga[i] : i;
+	
+	/* Subtract COM of reference group from reference coordinate */
+	/* rvec_sub(rtc->xref[gi], rtc->refcom[g], d); */
+	
+	/* Velocity correction follows from cross product *
+	 * of group axis with reference coordinate        */
+	outer_inc(axisv[g], rtc->xref[gi], v[i]);
+	rvec_dec(v[i], shiftv[g]);
+	outer_inc(axisx[g], rtc->xref[gi], x[i]);
+	rvec_dec(x[i], shiftx[g]);
+    }
+
+    for (g=0; g<rtc->nr; g++)
+    {
+        clear_rvec(rtc->sumc[g]);
+	clear_rvec(rtc->sumx[g]);
+	clear_rvec(rtc->sumv[g]);
+	clear_rvec(rtc->outerc[g]);
+	clear_rvec(rtc->outerx[g]);
+	clear_rvec(rtc->outerv[g]);	  
+    }
+    sfree(axisx);
+    sfree(axisv);
+    sfree(shiftx);
+    sfree(shiftv);
+}
+
+/* END OF ROTATIONAL CONSTRAINTS */
+
 
 t_vcm *init_vcm(FILE *fp, gmx_groups_t *groups, const t_inputrec *ir)
 {
@@ -159,64 +525,6 @@ static void update_tensor(rvec x, real m0, tensor I)
     I[ZZ][XX] += xz;
     I[YY][ZZ] += yz;
     I[ZZ][YY] += yz;
-}
-
-
-static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *v, t_mdatoms *md, t_rtc *rtc)
-{
-    rvec d;
-
-    for (int g = 0; g < rtc->nr; g++)
-    {
-	clear_rvec(rtc->outerx[g]);
-	clear_rvec(rtc->sumx[g]); 
-	clear_rvec(rtc->outerv[g]);
-	clear_rvec(rtc->sumv[g]); 
-	if (md->nMassPerturbed)
-	{
-	    clear_rvec(rtc->refcom[g]);
-	}	    
-    }
-    
-    for (int i = start; i < start+homenr; i++)
-    {
-	int g = md->cVCM ? md->cVCM[i] : 0;
-	
-	if (g >= rtc->nr)
-	  continue;
-	
-	int gi = la2ga ? la2ga[i] : i;
-	real m0 = md->massT[i];
-	
-	/* 
-	   RTC stuff from velocities
-	   Correction is applied to current positions based on past velocities,
-	   and to current velocities (t or t+dt/2) based on these velocities.
-	   The vectors sumv, outerv, sumx and outerx need to be communicated/collected.
-	*/
-	svmul(m0,v[i],d);
-	outer_inc(d,rtc->xref[gi],rtc->outerv[g]);
-	rvec_inc(rtc->sumv[g],d);
-	
-	if (md->nMassPerturbed)
-	{
-	    svmul(m0,rtc->xref[gi],d);
-	    rvec_inc(rtc->refcom[g],d);
-	}
-    }
-    
-    if (rtc->nst > 1)
-    {
-	for (int g = 0; g < rtc->nr; g++)
-	{
-	    rvec_inc(rtc->sumc[g],   rtc->sumv[g]);
-	    rvec_inc(rtc->outerc[g], rtc->outerv[g]);
-	    
-	    /* Positional correction from velocity depends on time step */
-	    svmul(rtc->dt, rtc->sumc[g],   rtc->sumx[g]);
-	    svmul(rtc->dt, rtc->outerc[g], rtc->outerx[g]);
-	}
-    }
 }
 
 
@@ -409,106 +717,6 @@ doStopComMotionAccelerationCorrection(int                   homenr,
         }
     }
 }
-
-
-static void rtc_apply_grps(int *la2ga, int homenr, const unsigned short *group_id, rvec *x, rvec *v, t_rtc *rtc)
-{
-    /*
-      For the derivation of this check:
-      
-      ...
-      ...
-      
-      Correction per atom
-      
-      x_i'      = x_i + c_i
-      v_i'      = v_i + c_i / dt
-      
-      c_i / dt  = u (x) (r_i - r_com) - p / sum{m}
-                = u (x) r_i - ( u (x) r_com + p / sum{m} )
-                  ~~~~~~~~~   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                  per atom            per group
-                = u (x) r_i - s
-      
-      u         = minv(I_r) . (q + r_com (x) p)
-      s         = u (x) r_com + p / sum{m}
-      
-      Accumulated over k steps:
-      p_x       = sum_k{ sum_j{ m_j * v_jk } }          -- rtc->sumc[g]    
-      q_x       = sum_k{ sum_j{ m_j * v_jk (x) r_j } }  -- rtc->outerc[g]
-      
-      Last step only:
-      p_v       = sum_j{ m_j * v_j }                    -- rtc->sumv[g]
-      q_v       = sum_j{ m_j * v_j (x) r_j }            -- rtc->outerv[g]
-    */
-
-    rvec  *axisx=NULL, *outerx=NULL, *axisv=NULL, *outerv=NULL, *shiftx=NULL, *shiftv=NULL;
-
-    snew(axisx,  rtc->nr);
-    snew(outerx, rtc->nr);
-    snew(shiftx, rtc->nr);
-    
-    snew(axisv,  rtc->nr);
-    snew(outerv, rtc->nr);
-    snew(shiftv, rtc->nr);
-
-    for (int g = 0; g < rtc->nr; g++)
-    {
-	/* Determine the sort-of-axes-of-rotation */
-
-        /* Rotation axis for velocities */
-        outer_inc(rtc->refcom[g], rtc->sumv[g], rtc->outerv[g]);
-	mvmul(rtc->invinert[g], rtc->outerv[g], axisv[g]);   /* u_v */
-	
-	/* Shift for velocities */
-	svmul(1.0/rtc->tm[g], rtc->sumv[g], shiftv[g]);
-	outer_inc(axisv[g], rtc->refcom[g], shiftv[g]);
-        
-	/* Rotation axis for positions */
-	outer_inc(rtc->refcom[g], rtc->sumx[g], rtc->outerx[g]);
-	mvmul(rtc->invinert[g], rtc->outerx[g], axisx[g]);   /* u_x */
-	
-	/* Shift for positions */
-	svmul(1.0/rtc->tm[g], rtc->sumx[g], shiftx[g]);
-	outer_inc(axisx[g], rtc->refcom[g], shiftx[g]);
-    }
-
-    /* Determine per particle correction */
-    int g = 0;
-    for (int i = 0; i < homenr; i++)
-    {
-	if (group_id && (g = group_id[i]) >= rtc->nr)
-	{
-	    continue;
-	}
-	int gi = la2ga ? la2ga[i] : i;
-	
-	/* Subtract COM of reference group from reference coordinate */
-	/* rvec_sub(rtc->xref[gi], rtc->refcom[g], d); */
-	
-	/* Velocity correction follows from cross product *
-	 * of group axis with reference coordinate        */
-	outer_inc(axisv[g], rtc->xref[gi], v[i]);
-	rvec_dec(v[i], shiftv[g]);
-	outer_inc(axisx[g], rtc->xref[gi], x[i]);
-	rvec_dec(x[i], shiftx[g]);
-    }
-
-    for (g=0; g<rtc->nr; g++)
-    {
-        clear_rvec(rtc->sumc[g]);
-	clear_rvec(rtc->sumx[g]);
-	clear_rvec(rtc->sumv[g]);
-	clear_rvec(rtc->outerc[g]);
-	clear_rvec(rtc->outerx[g]);
-	clear_rvec(rtc->outerv[g]);	  
-    }
-    sfree(axisx);
-    sfree(axisv);
-    sfree(shiftx);
-    sfree(shiftv);
-}
-
 
 
 void do_stopcm_grp(FILE *fp, int *la2ga, int homenr, const unsigned short *group_id,
@@ -737,206 +945,3 @@ void check_cm_grp(FILE *fp, t_vcm *vcm, t_inputrec *ir, real Temp_Max)
     }
 }
 
-/*
- * Roto-translational constraints
- *
- * 
- */
-
-static void clear_rtc(t_rtc *rtc, int ngrp)
-{
-    rtc->nr = ngrp - 1; /* Account for possible rest group */
-
-    snew(rtc->refcom,   ngrp);
-    snew(rtc->invinert, ngrp);    
-    snew(rtc->outerx,   ngrp);
-    snew(rtc->outerv,   ngrp);
-    snew(rtc->outerc,   ngrp);
-    snew(rtc->sumx,     ngrp);
-    snew(rtc->sumv,     ngrp); 
-    snew(rtc->sumc,     ngrp); 
-    snew(rtc->tm,       ngrp);
-    for (int g = 0; g < ngrp; g++)
-    {
-        clear_rvec(rtc->refcom[g]);
-        clear_rvec(rtc->outerx[g]);
-        clear_rvec(rtc->outerv[g]);
-        clear_rvec(rtc->outerc[g]);
-        clear_rvec(rtc->sumx[g]);
-        clear_rvec(rtc->sumv[g]);
-        clear_rvec(rtc->sumc[g]);
-        clear_mat(rtc->invinert[g]);
-    }
-    rtc->xp  = NULL;
-}
-
-
-static void read_rtc_ref(const char *fnTPX, const char *fnRTC, gmx_mtop_t *mtop, t_rtc *rtc)
-{
-    t_state start_state;
-    t_topology top;
-    matrix box;
-    int epbc;
-
-    read_tpx_state(fnTPX, NULL, &start_state, NULL);
-
-    fprintf(stderr,"Reading RTC reference coordinates from %s\n", fnRTC ? fnRTC : fnTPX);
-
-    if (fnRTC)
-    {
-	read_tps_conf(fnRTC, &top, &epbc, &(rtc->xref), NULL, box, FALSE );
-	rtc->nref = top.atoms.nr;
-    }
-    else
-    {
-        rtc->nref = mtop->natoms;
-	snew(rtc->xref, mtop->natoms);
-	for (int i=0; i < mtop->natoms; i++)
-	{
-	  copy_rvec(start_state.x[i], rtc->xref[i]);
-	}            
-    }
-}
-
-
-static void init_rtc_loop_over_atoms(gmx_mtop_t *mtop, unsigned char *grps, t_rtc *rtc)
-{
-    int g = 0;
-    real m0;
-
-    gmx_mtop_atomloop_all_t aloop;
-    int at_global;
-    const t_atom  *atom;
-
-    aloop = gmx_mtop_atomloop_all_init(mtop);
-    for (int i = 0; i < rtc->nref; i++)
-    {
-        if (grps)
-        {
- 	    g = grps[i];
-        }
-	gmx_mtop_atomloop_all_next(aloop, &at_global, &atom);
-        m0 = atom->m; 
-        rtc->tm[g] += m0;
-        for (int j=0; j < DIM; j++)
-        {
-            rtc->refcom[g][j] += m0*rtc->xref[i][j];
-
-            /* Whoever decides to set DIM to something else than 3 
-             * has to make this a double for loop :p
-             */
-            int k = (j+1) % DIM;
-            rtc->invinert[g][j][j] += m0*rtc->xref[i][j]*rtc->xref[i][j];
-            rtc->invinert[g][j][k] += m0*rtc->xref[i][j]*rtc->xref[i][k];
-        }
-    }
-}
-
-
-/*
- * Called after init_rtc_loop_over_atoms to finalize 
- * centers of mass and MOI tensors for each group
- */
-static void init_rtc_finalize_groups(t_rtc *rtc)
-{
-    rvec di;
-    matrix mi;
-
-    for (int g = 0; g < rtc->nr; g++)
-    {
-        svmul( 1.0/rtc->tm[g], rtc->refcom[g], rtc->refcom[g] );
-        di[0] = rtc->refcom[g][0]*rtc->refcom[g][0];
-        di[1] = rtc->refcom[g][1]*rtc->refcom[g][1];
-        di[2] = rtc->refcom[g][2]*rtc->refcom[g][2];
-        for (int i = 0; i<DIM; i++)
-        {
-            int j = (i+1) % DIM;
-            int k = (i+2) % DIM;
-            mi[i][i] = rtc->invinert[g][j][j] + rtc->invinert[g][k][k] - rtc->tm[g]*(di[j]+di[k]);
-            mi[i][j] = mi[j][i] = rtc->tm[g]*rtc->refcom[g][i]*rtc->refcom[g][j] - rtc->invinert[g][i][j];
-        }
-        gmx::invertMatrix(mi, rtc->invinert[g]);
-    }
-}
-
-
-t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
-                t_commrec   *cr,     /* communication record                */
-                t_inputrec  *ir,     /* input record                        */
-                const char  *fnRTC,  /* file containing reference structure */
-                const char  *fnLOG,  /* file for logging/debugging          */
-                rvec        *x,      /* positions of the whole MD system;   */
-                const char  *fnTPX)  /* required if we read in a checkpoint */
-{
-    t_rtc   *rtc;
-
-
-    /* Set stuff for RTC groups */
-    snew(rtc, 1);
-    clear_rtc(rtc, mtop->groups.grps[egcVCM].nr + 1);
-    rtc->nst = ir->nstcomm;
-    rtc->dt  = ir->delta_t;
-
-    /* Read in the reference file if one is given */
-    if (MASTER(cr))
-    {
-      read_rtc_ref(fnTPX, fnRTC, mtop, rtc);
-    }
-
-    /* Now have to communicate the whole lot */
-    if (PAR(cr))
-    {
-        block_bc(  cr, rtc->nref           );
-        snew_bc(   cr, rtc->xref, rtc->nref);
-        nblock_bc( cr, rtc->nref, rtc->xref);
-    }
-
-    /* Then calculate the COM and matrix of inertia per group */
-    init_rtc_loop_over_atoms(mtop, mtop->groups.grpnr[egcVCM], rtc);
-    init_rtc_finalize_groups(rtc);
-
-    return rtc;
-}
-
-
-void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bool bStopCM)
-{
-    int    i, j, g, gi;
-    real   m0;
-    rvec   d, oc, sc;
-
-    if (bStopCM)
-    {
-        /* We just applied corrections: clear data */
-        for (g=0; g<rtc->nr; g++)
-	{
-	    clear_rvec(rtc->sumc[g]);
-	    clear_rvec(rtc->outerc[g]);
-	}
-
-        /* The velocities have been corrected, so no rotation or com motion this step */
-        return;
-    }
-
-    /* Accumulate data for the next round */
-    g  = 0;
-    for (i = 0; i < md->homenr; i++) 
-    {
-        m0 = md->massT[i];
-
-        if (md->cVCM)
-            g = md->cVCM[i];
-        
-        gi = la2ga ? la2ga[i] : i;
-
-        if (g >= rtc->nr || gi >= rtc->nref)
-        {
-            continue;
-        }
-
-        /* Positions */
-        svmul(m0, v[i], d);
-        outer_inc(d, rtc->xref[gi], rtc->outerc[g]);
-        rvec_inc(rtc->sumc[g], d);
-    }
-}
