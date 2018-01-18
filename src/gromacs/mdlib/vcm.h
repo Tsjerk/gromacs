@@ -72,6 +72,7 @@ typedef struct {
 
   rvec   *outerc;              /* Cumulative some of cross products      */
   rvec   *sumc;                /* Cumulative some of deviations          */
+  real   *tm;                  /* Mass per group                         */
 
   /* Only the following require global communication 
    * and only at every nstcomm steps                                     */

@@ -57,7 +57,7 @@
 #include "gromacs/fileio/confio.h"
 
 /* #include "mvdata.h" */    /* Required for applying RTC in parallel */
-#include "gromacs/domdec/ga2la.h" /* Required for applying RTC in parallel */
+/* #include "gromacs/domdec/ga2la.h" /* Required for applying RTC in parallel */
 #include "gromacs/fileio/confio.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/mdtypes/state.h"
@@ -735,47 +735,20 @@ void check_cm_grp(FILE *fp, t_vcm *vcm, t_inputrec *ir, real Temp_Max)
  * 
  */
 
-t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
-		/*                t_mdatoms   *atoms,  /* atom stuff; need masses             */
-                t_commrec   *cr,     /* communication record                */
-                t_inputrec  *ir,     /* input record                        */
-                const char  *fnRTC,  /* file containing reference structure */
-                const char  *fnLOG,  /* file for logging/debugging          */
-                rvec        *x,      /* positions of the whole MD system;   */
-                const char  *fnTPX)  /* required if we read in a checkpoint */
+static void clear_rtc(t_rtc *rtc, int ngrp)
 {
-    int     natoms,epbc,i,j,k,g;
-    char    title[4096]; // Should be STRLEN - from cstringutil.h
-    t_atoms refatoms;
-    const t_atom  *atom;
-    t_state start_state;
-	t_topology top;
-	/*    gmx_mtop_atomlookup_t alook;*/
-    matrix  box,mi,T,S;
-    real    m0,*tm;
-    rvec    di,ri;
+    rtc->nr = ngrp - 1; /* Account for possible rest group */
 
-    t_rtc   *rtc;
-
-    gmx_groups_t *groups=&mtop->groups;
-
-    clear_mat(S);
-    clear_mat(T);
-    
-    /* Set stuff for RTC groups */
-    snew(rtc, 1);
-    rtc->nr = groups->grps[egcVCM].nr;
-
-    snew(rtc->refcom,   rtc->nr+1);
-    snew(rtc->invinert, rtc->nr+1);    
-    snew(rtc->outerx,   rtc->nr+1);
-    snew(rtc->outerv,   rtc->nr+1);
-    snew(rtc->outerc,   rtc->nr+1);
-    snew(rtc->sumx,     rtc->nr+1);
-    snew(rtc->sumv,     rtc->nr+1); 
-    snew(rtc->sumc,     rtc->nr+1); 
-    snew(tm,            rtc->nr+1);
-    for (g=0; g < rtc->nr+1; g++)
+    snew(rtc->refcom,   ngrp);
+    snew(rtc->invinert, ngrp);    
+    snew(rtc->outerx,   ngrp);
+    snew(rtc->outerv,   ngrp);
+    snew(rtc->outerc,   ngrp);
+    snew(rtc->sumx,     ngrp);
+    snew(rtc->sumv,     ngrp); 
+    snew(rtc->sumc,     ngrp); 
+    snew(rtc->tm,       ngrp);
+    for (int g = 0; g < ngrp; g++)
     {
         clear_rvec(rtc->refcom[g]);
         clear_rvec(rtc->outerx[g]);
@@ -787,33 +760,119 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
         clear_mat(rtc->invinert[g]);
     }
     rtc->xp  = NULL;
+}
+
+
+static void read_rtc_ref(const char *fnTPX, const char *fnRTC, gmx_mtop_t *mtop, t_rtc *rtc)
+{
+    t_state start_state;
+    t_topology top;
+    matrix box;
+    int epbc;
+
+    read_tpx_state(fnTPX, NULL, &start_state, NULL);
+
+    fprintf(stderr,"Reading RTC reference coordinates from %s\n", fnRTC ? fnRTC : fnTPX);
+
+    if (fnRTC)
+    {
+	read_tps_conf(fnRTC, &top, &epbc, &(rtc->xref), NULL, box, FALSE );
+	rtc->nref = top.atoms.nr;
+    }
+    else
+    {
+        rtc->nref = mtop->natoms;
+	snew(rtc->xref, mtop->natoms);
+	for (int i=0; i < mtop->natoms; i++)
+	{
+	  copy_rvec(start_state.x[i], rtc->xref[i]);
+	}            
+    }
+}
+
+
+static void init_rtc_loop_over_atoms(gmx_mtop_t *mtop, unsigned char *grps, t_rtc *rtc)
+{
+    int g = 0;
+    real m0;
+
+    gmx_mtop_atomloop_all_t aloop;
+    int at_global;
+    const t_atom  *atom;
+
+    aloop = gmx_mtop_atomloop_all_init(mtop);
+    for (int i = 0; i < rtc->nref; i++)
+    {
+        if (grps)
+        {
+ 	    g = grps[i];
+        }
+	gmx_mtop_atomloop_all_next(aloop, &at_global, &atom);
+        m0 = atom->m; 
+        rtc->tm[g] += m0;
+        for (int j=0; j < DIM; j++)
+        {
+            rtc->refcom[g][j] += m0*rtc->xref[i][j];
+
+            /* Whoever decides to set DIM to something else than 3 
+             * has to make this a double for loop :p
+             */
+            int k = (j+1) % DIM;
+            rtc->invinert[g][j][j] += m0*rtc->xref[i][j]*rtc->xref[i][j];
+            rtc->invinert[g][j][k] += m0*rtc->xref[i][j]*rtc->xref[i][k];
+        }
+    }
+}
+
+
+/*
+ * Called after init_rtc_loop_over_atoms to finalize 
+ * centers of mass and MOI tensors for each group
+ */
+static void init_rtc_finalize_groups(t_rtc *rtc)
+{
+    rvec di;
+    matrix mi;
+
+    for (int g = 0; g < rtc->nr; g++)
+    {
+        svmul( 1.0/rtc->tm[g], rtc->refcom[g], rtc->refcom[g] );
+        di[0] = rtc->refcom[g][0]*rtc->refcom[g][0];
+        di[1] = rtc->refcom[g][1]*rtc->refcom[g][1];
+        di[2] = rtc->refcom[g][2]*rtc->refcom[g][2];
+        for (int i = 0; i<DIM; i++)
+        {
+            int j = (i+1) % DIM;
+            int k = (i+2) % DIM;
+            mi[i][i] = rtc->invinert[g][j][j] + rtc->invinert[g][k][k] - rtc->tm[g]*(di[j]+di[k]);
+            mi[i][j] = mi[j][i] = rtc->tm[g]*rtc->refcom[g][i]*rtc->refcom[g][j] - rtc->invinert[g][i][j];
+        }
+        gmx::invertMatrix(mi, rtc->invinert[g]);
+    }
+}
+
+
+t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
+                t_commrec   *cr,     /* communication record                */
+                t_inputrec  *ir,     /* input record                        */
+                const char  *fnRTC,  /* file containing reference structure */
+                const char  *fnLOG,  /* file for logging/debugging          */
+                rvec        *x,      /* positions of the whole MD system;   */
+                const char  *fnTPX)  /* required if we read in a checkpoint */
+{
+    t_rtc   *rtc;
+
+
+    /* Set stuff for RTC groups */
+    snew(rtc, 1);
+    clear_rtc(rtc, mtop->groups.grps[egcVCM].nr + 1);
     rtc->nst = ir->nstcomm;
     rtc->dt  = ir->delta_t;
 
     /* Read in the reference file if one is given */
     if (MASTER(cr))
     {
-        read_tpx_state(fnTPX, NULL, &start_state, NULL);
-
-        fprintf(stderr,"Reading RTC reference coordinates from %s\n", fnRTC ? fnRTC : fnTPX);
-
-        if (fnRTC)
-        {
-            // get_stx_coordnum(fnRTC, &(rtc->nref));
-            // snew(rtc->xref,rtc->nref);
-            read_tps_conf(fnRTC, &top, &epbc, &(rtc->xref), NULL, box, FALSE );
-			rtc->nref = top.atoms.nr;
-            // init_t_atoms(&refatoms,rtc->nref,FALSE);		        
-        }
-        else
-        {
-            rtc->nref = mtop->natoms;
-            snew(rtc->xref, mtop->natoms);
-            for (i=0; i < mtop->natoms; i++)
-            {
-                copy_rvec(start_state.x[i], rtc->xref[i]);
-            }            
-        }
+      read_rtc_ref(fnTPX, fnRTC, mtop, rtc);
     }
 
     /* Now have to communicate the whole lot */
@@ -824,55 +883,13 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
         nblock_bc( cr, rtc->nref, rtc->xref);
     }
 
-    /*    alook = gmx_mtop_atomlookup_init(mtop);*/
-
     /* Then calculate the COM and matrix of inertia per group */
-    g = 0;
-    gmx_mtop_atomloop_all_t aloop;
-    int at_global;
-    aloop = gmx_mtop_atomloop_all_init(mtop);
-    for (i = 0; i < rtc->nref; i++)
-    {
-        if (groups->grpnr[egcVCM])
-        {
-            g = groups->grpnr[egcVCM][i];
-        }
-	/*        gmx_mtop_atomnr_to_atom(alook, i, &atom);*/
-	gmx_mtop_atomloop_all_next(aloop, &at_global, &atom);
-        m0 = atom->m; 
-        tm[g] += m0;
-        for (j=0; j<DIM; j++)
-        {
-            rtc->refcom[g][j] += m0*rtc->xref[i][j];
-
-            /* Whoever decides to set DIM to something else than 3 
-             * has to make this a double for loop :p
-             */
-            k = (j+1)%DIM;
-            rtc->invinert[g][j][j] += m0*rtc->xref[i][j]*rtc->xref[i][j];
-            rtc->invinert[g][j][k] += m0*rtc->xref[i][j]*rtc->xref[i][k];
-        }
-    }
-
-    /*    gmx_mtop_atomlookup_destroy(alook);*/
-    for (g=0; g < rtc->nr; g++)
-    {
-        svmul( 1.0/tm[g], rtc->refcom[g], rtc->refcom[g] );
-        di[0] = rtc->refcom[g][0]*rtc->refcom[g][0];
-        di[1] = rtc->refcom[g][1]*rtc->refcom[g][1];
-        di[2] = rtc->refcom[g][2]*rtc->refcom[g][2];
-        for (i=0; i<DIM; i++)
-        {
-            j = (i+1)%DIM;
-            k = (i+2)%DIM;
-            mi[i][i] = rtc->invinert[g][j][j] + rtc->invinert[g][k][k] - tm[g]*(di[j]+di[k]);
-            mi[i][j] = mi[j][i] = tm[g]*rtc->refcom[g][i]*rtc->refcom[g][j] - rtc->invinert[g][i][j];
-        }
-        gmx::invertMatrix(mi, rtc->invinert[g]);
-    }
+    init_rtc_loop_over_atoms(mtop, mtop->groups.grpnr[egcVCM], rtc);
+    init_rtc_finalize_groups(rtc);
 
     return rtc;
 }
+
 
 void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bool bStopCM)
 {
