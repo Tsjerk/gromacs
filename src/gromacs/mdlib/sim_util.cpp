@@ -111,6 +111,7 @@
 #include "gromacs/utility/pleasecite.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/sysinfo.h"
+#include "gromacs/commandline/filenm.h"
 
 #include "nbnxn_gpu.h"
 #include "nbnxn_kernels/nbnxn_kernel_cpu.h"
@@ -2950,6 +2951,12 @@ void init_md(FILE *fplog,
     if (vcm != nullptr)
     {
         *vcm = init_vcm(fplog, &mtop->groups, ir);
+    }
+
+    if (ir->comm_mode == ecmRTC)
+    {
+        (*vcm)->rtc = init_rtc(mtop, cr, ir, opt2fn_null("-rtc",nfile,fnm),
+			       NULL, MASTER(cr) ? as_rvec_array(globalState->x.data()) : nullptr, ftp2fn(efTPR,nfile,fnm));
     }
 
     if (EI_DYNAMICS(ir->eI) && !mdrunOptions.continuationOptions.appendFiles)

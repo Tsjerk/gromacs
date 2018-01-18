@@ -548,12 +548,6 @@ double gmx::do_md(FILE *fplog, t_commrec *cr, const gmx::MDLogger &mdlog,
         update_realloc(upd, state->natoms);
     }
 
-    if (ir->comm_mode == ecmRTC)
-    {
-        vcm->rtc = init_rtc(top_global, cr, ir, opt2fn_null("-rtc",nfile,fnm),
-                            NULL, MASTER(cr) ? as_rvec_array(state_global->x.data()) : nullptr, ftp2fn(efTPR,nfile,fnm));
-    }
-
     /* Set up interactive MD (IMD) */
     init_IMD(ir, cr, top_global, fplog, ir->nstcalcenergy, MASTER(cr) ? as_rvec_array(state_global->x.data()) : nullptr,
              nfile, fnm, oenv, mdrunOptions);
