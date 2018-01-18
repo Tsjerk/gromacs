@@ -123,7 +123,7 @@ static void read_rtc_ref(const char *fnTPX, const char *fnRTC, gmx_mtop_t *mtop,
 
     if (fnRTC)
     {
-	read_tps_conf(fnRTC, &top, &epbc, &(rtc->xref), NULL, box, FALSE );
+	read_tps_conf(fnRTC, &top, &epbc, &(rtc->xref), NULL, rtc->box, FALSE );
 	rtc->nref = top.atoms.nr;
     }
     else
@@ -133,7 +133,8 @@ static void read_rtc_ref(const char *fnTPX, const char *fnRTC, gmx_mtop_t *mtop,
 	for (int i=0; i < mtop->natoms; i++)
 	{
 	  copy_rvec(start_state.x[i], rtc->xref[i]);
-	}            
+	}
+	copy_mat(start_state.box, rtc->box);
     }
 }
 
@@ -213,6 +214,7 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     /* Set stuff for RTC groups */
     snew(rtc, 1);
     clear_rtc(rtc, mtop->groups.grps[egcVCM].nr + 1);
+    rtc->mode = ir->comm_mode;
     rtc->nst = ir->nstcomm;
     rtc->dt  = ir->delta_t;
 
@@ -226,6 +228,7 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     if (PAR(cr))
     {
         block_bc(  cr, rtc->nref           );
+	block_bc(  cr, rtc->box            );
         snew_bc(   cr, rtc->xref, rtc->nref);
         nblock_bc( cr, rtc->nref, rtc->xref);
     }
@@ -233,6 +236,9 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
     /* Then calculate the COM and matrix of inertia per group */
     init_rtc_loop_over_atoms(mtop, mtop->groups.grpnr[egcVCM], rtc);
     init_rtc_finalize_groups(rtc);
+
+    /* The box inverse is necessary for RTC against ref coordinates */
+    gmx::invertMatrix(rtc->box, rtc->invbox);
 
     return rtc;
 }
@@ -281,9 +287,9 @@ void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bo
 }
 
 
-static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *v, t_mdatoms *md, t_rtc *rtc)
+static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *x, rvec *v, t_mdatoms *md, t_rtc *rtc)
 {
-    rvec d;
+  rvec d, bc;
 
     for (int g = 0; g < rtc->nr; g++)
     {
@@ -313,10 +319,27 @@ static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *v, t_mdatoms 
 	   and to current velocities (t or t+dt/2) based on these velocities.
 	   The vectors sumv, outerv, sumx and outerx need to be communicated/collected.
 	*/
-	svmul(m0,v[i],d);
-	outer_inc(d,rtc->xref[gi],rtc->outerv[g]);
-	rvec_inc(rtc->sumv[g],d);
-	
+	svmul(m0, v[i], d);
+	outer_inc(d, rtc->xref[gi], rtc->outerv[g]);
+	rvec_inc(rtc->sumv[g], d);
+
+	if (rtc->mode == ecmRTCX)
+	{
+	    /* 
+	       RTC stuff from deviations from the reference structure.
+	    */
+	    rvec_sub(x[i], rtc->xref[gi], d);
+	    mvmul(rtc->invbox, d, bc);
+	    bc[0] -= floor(bc[0] + 0.5);
+	    bc[1] -= floor(bc[1] + 0.5);
+	    bc[2] -= floor(bc[2] + 0.5);
+	    mvmul(rtc->box, bc, d);
+	    svmul(m0, d, d);
+
+	    outer_inc(d, rtc->xref[gi], rtc->outerx[g]);
+	    rvec_inc(rtc->sumx[g], d);	  
+	}
+
 	if (md->nMassPerturbed)
 	{
 	    svmul(m0,rtc->xref[gi],d);
@@ -324,8 +347,9 @@ static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *v, t_mdatoms 
 	}
     }
     
-    if (rtc->nst > 1)
+    if (rtc->mode == ecmRTC && rtc->nst > 1 )
     {
+        /* For RTCX we set sumx and outerx directly */
 	for (int g = 0; g < rtc->nr; g++)
 	{
 	    rvec_inc(rtc->sumc[g],   rtc->sumv[g]);
@@ -372,10 +396,12 @@ static void rtc_apply_grps(int *la2ga, int homenr, const unsigned short *group_i
 
     rvec  *axisx=NULL, *outerx=NULL, *axisv=NULL, *outerv=NULL, *shiftx=NULL, *shiftv=NULL;
 
-    snew(axisx,  rtc->nr);
-    snew(outerx, rtc->nr);
-    snew(shiftx, rtc->nr);
+    /* Accumulated data (correction of positions) */
+    snew(axisx,  rtc->nr); /* u */
+    snew(outerx, rtc->nr); /* q */
+    snew(shiftx, rtc->nr); /* s */
     
+    /* Instantaneous data (correction of velocities) */
     snew(axisv,  rtc->nr);
     snew(outerv, rtc->nr);
     snew(shiftv, rtc->nr);
@@ -402,6 +428,7 @@ static void rtc_apply_grps(int *la2ga, int homenr, const unsigned short *group_i
     }
 
     /* Determine per particle correction */
+    /* Independent of RTC mode (velocity or direct) */
     int g = 0;
     for (int i = 0; i < homenr; i++)
     {
@@ -624,7 +651,7 @@ void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
 
     if (vcm->mode == ecmRTC)
     {
-        rtc_calc_grps(la2ga, start, homenr, v, md, vcm->rtc);
+        rtc_calc_grps(la2ga, start, homenr, x, v, md, vcm->rtc);
     }
 }
 

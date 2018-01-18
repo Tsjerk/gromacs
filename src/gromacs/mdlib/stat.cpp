@@ -285,7 +285,7 @@ void global_stat(gmx_global_stat_t gs,
             ici   = add_binr(rb, DIM*DIM*vcm->nr, vcm->group_i[0][0]);
             where();
         }
-        else if (vcm->mode == ecmRTC)
+        else if (vcm->mode == ecmRTC || vcm->mode == ecmRTCX)
         {
             if (vcm->rtc->bFEP)
             {
@@ -408,7 +408,7 @@ void global_stat(gmx_global_stat_t gs,
             extract_binr(rb, ici, DIM*DIM*vcm->nr, vcm->group_i[0][0]);
             where();
         }
-        else if (vcm->mode == ecmRTC)
+        else if (vcm->mode == ecmRTC || vcm->mode == ecmRTCX)
         {
             if (vcm->rtc->bFEP)
             {

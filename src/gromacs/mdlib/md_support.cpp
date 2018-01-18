@@ -253,7 +253,8 @@ void compute_globals(FILE *fplog, gmx_global_stat *gstat, t_commrec *cr, t_input
          * to avoid (incorrect) correction of the initial coordinates.
          */
         rvec *xPtr = nullptr;
-        if (vcm->mode == ecmANGULAR || vcm->mode == ecmRTC || (vcm->mode == ecmLINEAR_ACCELERATION_CORRECTION && !(flags & CGLO_INITIALIZATION)))
+        if (vcm->mode == ecmANGULAR || vcm->mode == ecmRTC || vcm->mode == ecmRTCX || 
+	    (vcm->mode == ecmLINEAR_ACCELERATION_CORRECTION && !(flags & CGLO_INITIALIZATION)))
         {
             xPtr = as_rvec_array(state->x.data());
         }

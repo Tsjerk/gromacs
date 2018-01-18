@@ -182,7 +182,7 @@ const char *edispc_names[edispcNR+1] = {
 };
 
 const char *ecm_names[ecmNR+1] = {
-    "Linear", "Angular", "RTC", "None", "Linear-acceleration-correction", nullptr
+  "Linear", "Angular", "RTC", "RTCX", "None", "Linear-acceleration-correction", nullptr
 };
 
 const char *eann_names[eannNR+1] = {

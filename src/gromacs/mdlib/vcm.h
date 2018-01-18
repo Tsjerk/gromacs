@@ -56,10 +56,13 @@ struct t_inputrec;
 
 typedef struct {
   /* Set at initialization */
+  int    mode;                 /* ecmRTC or ecmRTCX                      */
   int    nr;                   /* Number of groups                       */
   int    nref;                 /* Number of atoms in reference structure */
   rvec   *xref;                /* Reference structure                    */
   rvec   *xp;                  /* Previous coordinates                   */
+  matrix box;                  /* PBC of reference structure             */
+  matrix invbox;               /* Inverse of PBC of reference            */
   matrix *invinert;            /* Inverse matrix of inertia per group    */
   gmx_bool   bFEP;             /* Set when doing FEP (masses may change) */
   rvec   *refcom;              /* COM per group
