@@ -246,14 +246,14 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
 
 void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bool bStopCM)
 {
-    int    i, j, g, gi;
+    int    gi;
     real   m0;
     rvec   d, oc, sc;
 
     if (bStopCM)
     {
         /* We just applied corrections: clear data */
-        for (g=0; g<rtc->nr; g++)
+        for (int g = 0; g<rtc->nr; g++)
 	{
 	    clear_rvec(rtc->sumc[g]);
 	    clear_rvec(rtc->outerc[g]);
@@ -263,26 +263,30 @@ void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bo
         return;
     }
 
-    /* Accumulate data for the next round */
-    g  = 0;
-    for (i = 0; i < md->homenr; i++) 
+    if (rtc->mode == ecmRTC)
     {
-        m0 = md->massT[i];
+        /* Accumulate data for the next round */
+        int g = 0;
 
-        if (md->cVCM)
-            g = md->cVCM[i];
+	for (int i = 0; i < md->homenr; i++) 
+	{
+	    m0 = md->massT[i];
+
+	    if (md->cVCM)
+	        g = md->cVCM[i];
         
-        gi = la2ga ? la2ga[i] : i;
+	    gi = la2ga ? la2ga[i] : i;
 
-        if (g >= rtc->nr || gi >= rtc->nref)
-        {
-            continue;
-        }
-
-        /* Positions */
-        svmul(m0, v[i], d);
-        outer_inc(d, rtc->xref[gi], rtc->outerc[g]);
-        rvec_inc(rtc->sumc[g], d);
+	    if (g >= rtc->nr || gi >= rtc->nref)
+	    {
+		continue;
+	    }
+	    
+	    /* Positions */
+	    svmul(m0, v[i], d);
+	    outer_inc(d, rtc->xref[gi], rtc->outerc[g]);
+	    rvec_inc(rtc->sumc[g], d);
+	}
     }
 }
 
@@ -297,7 +301,7 @@ static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *x, rvec *v, t
 	clear_rvec(rtc->sumx[g]); 
 	clear_rvec(rtc->outerv[g]);
 	clear_rvec(rtc->sumv[g]); 
-	if (md->nMassPerturbed)
+	if (0 && md->nMassPerturbed)
 	{
 	    clear_rvec(rtc->refcom[g]);
 	}	    
@@ -340,7 +344,7 @@ static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *x, rvec *v, t
 	    rvec_inc(rtc->sumx[g], d);	  
 	}
 
-	if (md->nMassPerturbed)
+	if (0 && md->nMassPerturbed)
 	{
 	    svmul(m0,rtc->xref[gi],d);
 	    rvec_inc(rtc->refcom[g],d);

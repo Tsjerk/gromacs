@@ -287,7 +287,7 @@ void global_stat(gmx_global_stat_t gs,
         }
         else if (vcm->mode == ecmRTC || vcm->mode == ecmRTCX)
         {
-            if (vcm->rtc->bFEP)
+            if (0 && vcm->rtc->bFEP)
             {
                 ici   = add_binr(rb, DIM*vcm->rtc->nr, vcm->rtc->refcom[0]);
                 where();
