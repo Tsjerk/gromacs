@@ -89,7 +89,7 @@ makeMDAtoms(FILE *fp, const gmx_mtop_t &mtop, const t_inputrec &ir,
     mdAtoms->mdatoms_.reset(md);
 
     md->nenergrp = mtop.groups.grps[egcENER].nr;
-    md->bVCMgrps = (mtop.groups.grps[egcVCM].nr > 1);
+    md->bVCMgrps = (mtop.groups.grps[egcVCM].nr > 0);
 
     /* Determine the total system mass and perturbed atom counts */
     double                     totalMassA = 0.0;
