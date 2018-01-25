@@ -2953,7 +2953,7 @@ void init_md(FILE *fplog,
         *vcm = init_vcm(fplog, &mtop->groups, ir);
     }
 
-    if (ir->comm_mode == ecmRTC)
+    if (ir->comm_mode == ecmRTC || ir->comm_mode == ecmRTCX)
     {
         (*vcm)->rtc = init_rtc(mtop, cr, ir, opt2fn_null("-rtc",nfile,fnm),
 			       NULL, MASTER(cr) ? as_rvec_array(globalState->x.data()) : nullptr, ftp2fn(efTPR,nfile,fnm));

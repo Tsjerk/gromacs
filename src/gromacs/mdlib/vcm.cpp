@@ -210,7 +210,6 @@ t_rtc *init_rtc(gmx_mtop_t  *mtop,   /* global topology                     */
 {
     t_rtc   *rtc;
 
-
     /* Set stuff for RTC groups */
     snew(rtc, 1);
     clear_rtc(rtc, mtop->groups.grps[egcVCM].nr + 1);
@@ -293,7 +292,7 @@ void purge_rtc(FILE *fp, int *la2ga, t_mdatoms *md, rvec v[], t_rtc *rtc, gmx_bo
 
 static void rtc_calc_grps(int *la2ga, int start, int homenr, rvec *x, rvec *v, t_mdatoms *md, t_rtc *rtc)
 {
-  rvec d, bc;
+    rvec d, bc;
 
     for (int g = 0; g < rtc->nr; g++)
     {
