@@ -428,6 +428,14 @@ static void rtc_apply_grps(int *la2ga, int homenr, const unsigned short *group_i
 	/* Shift for positions */
 	svmul(1.0/rtc->tm[g], rtc->sumx[g], shiftx[g]);
 	outer_inc(axisx[g], rtc->refcom[g], shiftx[g]);
+
+	/* It makes sense to write this to file -TAW
+	fprintf(stderr, ">>[%d] %f %f %f | %f %f %f | %f %f %f | %f %f %f\n",
+		g, axisx[g][0], axisx[g][1], axisx[g][2],
+		axisv[g][0], axisv[g][1], axisv[g][2],
+		shiftx[g][0], shiftx[g][1], shiftx[g][2],
+		shiftv[g][0], shiftv[g][1], shiftv[g][2]);
+	*/
     }
 
     /* Determine per particle correction */
@@ -652,7 +660,7 @@ void calc_vcm_grp(FILE *fp, int *la2ga, int start, int homenr, t_mdatoms *md,
 
     }
 
-    if (vcm->mode == ecmRTC)
+    if (vcm->mode == ecmRTC || vcm->mode == ecmRTCX)
     {
         rtc_calc_grps(la2ga, start, homenr, x, v, md, vcm->rtc);
     }
@@ -756,7 +764,7 @@ void do_stopcm_grp(FILE *fp, int *la2ga, int homenr, const unsigned short *group
     real  tm, tm_1, c;
     rvec  dv, dvc, dvt, dx, d;
 
-    if (vcm.mode == ecmRTC)
+    if (vcm.mode == ecmRTC || vcm.mode == ecmRTCX)
     {
         rtc_apply_grps(la2ga, homenr, group_id, x, v, vcm.rtc);
     }
