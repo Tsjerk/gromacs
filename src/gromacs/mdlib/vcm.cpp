@@ -119,8 +119,6 @@ static void read_rtc_ref(const char *fnTPX, const char *fnRTC, gmx_mtop_t *mtop,
 
     read_tpx_state(fnTPX, NULL, &start_state, NULL);
 
-    fprintf(stderr,"Reading RTC reference coordinates from %s\n", fnRTC ? fnRTC : fnTPX);
-
     if (fnRTC)
     {
 	read_tps_conf(fnRTC, &top, &epbc, &(rtc->xref), NULL, rtc->box, FALSE );
@@ -136,6 +134,8 @@ static void read_rtc_ref(const char *fnTPX, const char *fnRTC, gmx_mtop_t *mtop,
 	}
 	copy_mat(start_state.box, rtc->box);
     }
+
+    fprintf(stderr,"Read %d RTC reference coordinates from %s\n", rtc->nref, fnRTC ? fnRTC : fnTPX);
 }
 
 
@@ -170,6 +170,8 @@ static void init_rtc_loop_over_atoms(gmx_mtop_t *mtop, unsigned char *grps, t_rt
             rtc->invinert[g][j][k] += m0*rtc->xref[i][j]*rtc->xref[i][k];
         }
     }
+    for (g=0; g<rtc->nr; g++)
+        fprintf(stderr, "Total mass of RTC group %d: %f", g+1, rtc->tm[g]);
 }
 
 
@@ -181,7 +183,7 @@ static void init_rtc_finalize_groups(t_rtc *rtc)
 {
     rvec di;
     matrix mi;
-
+    
     for (int g = 0; g < rtc->nr; g++)
     {
         svmul( 1.0/rtc->tm[g], rtc->refcom[g], rtc->refcom[g] );
@@ -192,10 +194,11 @@ static void init_rtc_finalize_groups(t_rtc *rtc)
         {
             int j = (i+1) % DIM;
             int k = (i+2) % DIM;
-            mi[i][i] = rtc->invinert[g][j][j] + rtc->invinert[g][k][k] - rtc->tm[g]*(di[j]+di[k]);
-            mi[i][j] = mi[j][i] = rtc->tm[g]*rtc->refcom[g][i]*rtc->refcom[g][j] - rtc->invinert[g][i][j];
+            mi[i][i] = (rtc->invinert[g][j][j] + rtc->invinert[g][k][k]) / rtc->tm[g] - (di[j]+di[k]);
+            mi[i][j] = mi[j][i] = rtc->refcom[g][i]*rtc->refcom[g][j] - rtc->invinert[g][i][j] / rtc->tm[g];
         }
         gmx::invertMatrix(mi, rtc->invinert[g]);
+	msmul(rtc->invinert[g], 1/rtc->tm[g], rtc->invinert[g]);
     }
 }
 
